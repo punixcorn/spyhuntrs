@@ -1,30 +1,14 @@
 #![allow(dead_code)]
-use std::env::current_dir;
 use std::error::Error;
 use std::str::FromStr;
 
+use crate::request::{self, urljoin};
 use crate::user_agents::{self, get_user_agent};
 use crate::utils;
 use colored::Colorize;
 use regex::Regex;
 use reqwest::header;
 use std::path::*;
-
-/// joins a domain and path eg www.domain.com/ + /api/v1  -> www.domain.com/api/v1
-pub fn urljoin(url: String, path: String) -> String {
-    let mut ret: String = String::new();
-    if url.ends_with("/") {
-        if path.starts_with("/") {
-            return format!("{}{}", url, path.clone().remove(0));
-        }
-        return format!("{url}{path}");
-    }
-    if path.starts_with("/") {
-        return format!("{url}{path}",);
-    }
-    return format!("{url}/{path}");
-    // could have just removed the '/' from each, but string cloning
-}
 
 pub async fn get_path_traversal_list() -> Vec<String> {
     let ret: Vec<String> = utils::read_from_file(String::from("./payloads/traversal.txt")).unwrap();
@@ -141,11 +125,19 @@ pub async fn scan_params(target: &String) -> Option<()> {
     let mut vulnerable: Vec<String> = vec![];
     let mut parameters_list: Vec<String> = vec![];
 
+    warn!("[I] Param links");
+    for i in &param_links {
+        println!("{i}");
+    }
+
     for param in &param_links {
         let param_vec: Vec<&str> = param.split('=').collect();
-        let parameter = param_vec[0];
-
-        parameters_list.push(parameter.to_string());
+        let trip_first_time = false;
+        for p in param_vec {
+            if p.ends_with("=") {
+                parameters_list.push(p.to_string());
+            }
+        }
     }
 
     // -imp save

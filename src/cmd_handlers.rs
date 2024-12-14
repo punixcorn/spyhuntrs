@@ -5,13 +5,13 @@ use std::path::PathBuf;
 use std::process;
 use std::process::*;
 
-use crate::logging;
+use crate::{logging, save};
 
 pub struct cmd_info {
-    output: Option<String>,
-    stderr: Option<String>,
-    stdout: Option<String>,
-    status: Option<i32>,
+    pub output: Option<String>,
+    pub stderr: Option<String>,
+    pub stdout: Option<String>,
+    pub status: Option<i32>,
 }
 
 pub fn run_cmd(mut args: Vec<&str>) -> Option<cmd_info> {
@@ -42,4 +42,32 @@ pub fn run_cmd(mut args: Vec<&str>) -> Option<cmd_info> {
         }
         _ => None,
     }
+}
+
+pub fn run_piped(mut cmd1: Vec<&str>, mut cmd2: Vec<&str>) -> Option<()> {
+    if cmd1.len() == 0 || cmd2.len() == 0 {
+        return None;
+    }
+
+    let cmd1_bin = cmd1[0];
+    let cmd2_bin = cmd2[0];
+
+    cmd1.remove(0);
+    cmd2.remove(0);
+
+    let cmd1_proc = Command::new(cmd1_bin)
+        .args(cmd1)
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect(stringify!("Failed to start {}", cmd1_bin));
+
+    let mut cmd2_proc = Command::new(cmd2_bin)
+        .args(cmd2)
+        .stdin(cmd1_proc.stdout.unwrap())
+        .spawn()
+        .expect(stringify!("Failed to start {}", cmd2_bin));
+
+    let _ = cmd2_proc.wait().expect("Failed to wait on process");
+
+    return Some(());
 }

@@ -58,6 +58,12 @@ pub fn fetch_pre_existing_user_agent() -> String {
     return _useragent_list[num].to_string().clone();
 }
 
+/// wiil fetch a user agent from the already defined ones
+/// but api friendly
+pub fn get_user_agent_prexisting() -> String {
+    return fetch_pre_existing_user_agent();
+}
+
 /// will get a user agent from the internet, if it can't ,  i will use the already defined ones
 pub async fn get_user_agent(fetch_new_user_agents: bool, mut force_update: bool) -> String {
     if !fetch_new_user_agents {
