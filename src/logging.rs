@@ -17,7 +17,7 @@ macro_rules! err {
 
 macro_rules! warn {
     ($message:expr) => {
-        println!("[W] {}", $message.italic().yellow());
+        println!("[W] {}", $message.italic().yellow())
     };
 
     ($message:expr,$exit_code:expr) => {
