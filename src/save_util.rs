@@ -2,8 +2,8 @@
 #![allow(unused_macros)]
 
 use crate::{
+    file_util::{file_exists, write_to_file},
     save, save_file,
-    utils::{file_exists, write_to_file},
 };
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};

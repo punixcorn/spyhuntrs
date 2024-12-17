@@ -2,16 +2,17 @@
 use std::error::Error;
 use std::str::FromStr;
 
+use crate::file_util;
 use crate::request::{self, urljoin};
 use crate::user_agents::{self, get_user_agent};
-use crate::utils;
 use colored::Colorize;
 use regex::Regex;
 use reqwest::header;
 use std::path::*;
 
 pub async fn get_path_traversal_list() -> Vec<String> {
-    let ret: Vec<String> = utils::read_from_file(String::from("./payloads/traversal.txt")).unwrap();
+    let ret: Vec<String> =
+        file_util::read_from_file(String::from("./payloads/traversal.txt")).unwrap();
     return ret;
 }
 

@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
-use crate::utils;
+use crate::file_util;
 use colored::Colorize;
 use rand::Rng;
 use reqwest::get;
@@ -71,7 +71,7 @@ pub async fn get_user_agent(fetch_new_user_agents: bool, mut force_update: bool)
     }
 
     // if its a first time
-    if !utils::file_exists(&String::from(user_agent_file)) {
+    if !file_util::file_exists(&String::from(user_agent_file)) {
         info!("Fetching user agents from the interwebs");
         force_update = true;
     }
@@ -104,16 +104,16 @@ pub async fn get_user_agent(fetch_new_user_agents: bool, mut force_update: bool)
 pub fn write_to_useragents_file(buffer: Vec<String>, force_update: bool) -> std::io::Result<()> {
     let mut file: File;
 
-    if utils::file_exists(&String::from(user_agent_file)) && force_update == false {
+    if file_util::file_exists(&String::from(user_agent_file)) && force_update == false {
         info!("useragent file already exists");
         return Ok(());
     }
-    utils::write_to_file(buffer, user_agent_file.to_string()).unwrap();
+    file_util::write_to_file(buffer, user_agent_file.to_string()).unwrap();
     return Ok(());
 }
 
 pub fn read_useragents_from_file() -> std::io::Result<Vec<String>> {
-    let lines: Vec<String> = utils::read_from_file(user_agent_file.to_string()).unwrap();
+    let lines: Vec<String> = file_util::read_from_file(user_agent_file.to_string()).unwrap();
     Ok(lines)
 }
 
