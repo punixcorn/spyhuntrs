@@ -9,6 +9,9 @@
 #![allow(unused_macros)]
 #![allow(unreachable_code)]
 
+use murmur3::murmur3_32;
+use serde::{de::IntoDeserializer, Deserializer};
+
 use crate::{
     cmd_handlers,
     cmd_handlers::cmd_info,
@@ -16,21 +19,29 @@ use crate::{
     request, save_util,
     save_util::{check_if_save, get_save_file, save_string, save_vec_strs, set_save_file},
 };
-
 // above all
-use colored::Colorize;
-use dns_lookup::lookup_addr;
-use reqwest::{dns::Resolve, header, ClientBuilder, Response};
-use shodan_client::*;
-use soup::pattern::Pattern;
-
-use std::{
-    error::Error,
-    net::{IpAddr, SocketAddr},
-    path::{self, Path, PathBuf},
-    str::{FromStr, SplitTerminator},
-    string,
-    sync::{Arc, Mutex},
+use {
+    base64::{
+        alphabet,
+        engine::{self, general_purpose},
+        Engine as _,
+    },
+    colored::Colorize,
+    dns_lookup::lookup_addr,
+    murmur3::murmur3_x64_128,
+    rayon::prelude::*,
+    reqwest::{dns::Resolve, header, ClientBuilder, Response},
+    shodan_client::*,
+    soup::pattern::Pattern,
+    std::{
+        error::Error,
+        fmt::format,
+        net::{IpAddr, SocketAddr},
+        path::{self, Path, PathBuf},
+        str::{FromStr, SplitTerminator},
+        string,
+        sync::{Arc, Mutex},
+    },
 };
 
 /// get the ip for a domain [Completed]
@@ -167,12 +178,13 @@ pub fn status_code(domain: &str) {
         format!("echo {}", domain),
         "httpx -silent -status-code".to_string(),
     );
+
     match xmd {
         Some(srt) => {
-            let x = format!(
-                "{domain} [{}]",
-                srt.stdout.unwrap_or_else(|| { "err".to_string() })
-            );
+            let x = srt
+                .stdout
+                .clone()
+                .unwrap_or_else(|| format!("{domain} [err]"));
             info!(x);
             handle_data!(x, String);
         }
@@ -222,16 +234,26 @@ pub async fn enumerate_domain(domain: &str) -> Option<String> {
     return None;
 }
 
-/// get the favicon for a domain
-pub async fn get_favicon(domain: String) -> Option<String> {
+/// get the favicon hash for a domain [completed]
+/// # Issue
+/// dunno how this works ?
+/// maybe just get the image and look ??
+/// because it could have been changed? plus hashes don't match
+pub async fn get_favicon_hash(domain: String) -> Option<()> {
     let new_url = request::urljoin(domain.clone(), "/favicon.ico".to_string());
     let resp = fetch_url!(new_url.clone());
     println!("{:#?}", resp);
     match resp {
         Ok(body) => {
             if body.status().is_success() {
-                return Some(new_url);
+                let mut base_64 = general_purpose::STANDARD.encode(body.bytes().await.unwrap());
+                // let hash = murmur3_32(&mut std::io::Cursor::new(base_64), 0).unwrap();
+                let hash = (murmurhash3::murmurhash3_x86_32(base_64.as_bytes(), 0)) as i32;
+                info!(format!("{domain} favicon hash : [{hash}]"));
+                handle_data!(format!("{domain} favicon hash : [{hash}]"), String);
+                return Some(());
             }
+            warn!(format!("could not find favicon for {}", domain.clone()));
             return None;
         }
         _ => {
@@ -239,4 +261,86 @@ pub async fn get_favicon(domain: String) -> Option<String> {
             return None;
         }
     }
+}
+
+/// checks for cors misconfiguration for a domain [completed]
+/// # Example
+/// ```rust
+/// check_cors_misconfig("www.example.com");
+/// ```
+/// # panic
+/// will panic if its unable to create a client
+pub fn check_cors_misconfig(domain: &str) -> () {
+    let payload = format!("{domain}, evil.com");
+
+    let client = reqwest::blocking::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(std::time::Duration::new(5, 0))
+        .build()
+        .unwrap_or_else(|err| {
+            warn!(format!("unable to create Client Session\n{}", err));
+            panic!();
+        });
+
+    // Prepare headers
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(reqwest::header::ORIGIN, payload.parse().unwrap());
+
+    // Make the request
+    let mut resp: reqwest::blocking::Response;
+    match client
+        .get(request::urljoin(domain.to_string(), "".to_string()))
+        .headers(headers)
+        .send()
+    {
+        Ok(response) => {
+            resp = response;
+        }
+        _ => {
+            warn!(format!("request to {domain} failed"));
+            return ();
+        }
+    };
+
+    //println!("{:#?}", resp);
+
+    let (mut allow_origin, mut allow_method): (bool, bool) = (false, false);
+    match resp.headers().get("Access-Control-Allow-Origin") {
+        Some(value) => {
+            if value.to_str().unwrap_or_else(|_| "") == "evil.com" {
+                allow_origin = false;
+            }
+        }
+        None => (),
+    };
+
+    match resp.headers().get("Access-Control-Allow-Credentials") {
+        Some(value) => {
+            if value.to_str().unwrap_or_else(|_| "") == "true" {
+                allow_origin = false;
+            }
+        }
+        None => (),
+    };
+    let mut vuln_status: String;
+    if allow_origin && allow_method {
+        vuln_status = "VULNERABLE".to_string();
+    } else {
+        vuln_status = "NOT VULNERABLE".to_string();
+    }
+    info!(format!("{vuln_status}: {domain}"));
+    handle_data!(format!("{vuln_status} : {domain}"), String);
+}
+
+/// checks for cors misconfiguration in parallel using rayon [completed]
+pub async fn run_cors_misconfig_threads(domains: Vec<&str>) -> () {
+    domains.par_iter().for_each(|&domain| {
+        {
+            info!(format!("Checking CORS for {}", domain));
+            //std::thread::sleep(std::time::Duration::from_secs(1));
+            check_cors_misconfig(domain);
+            info!(format!("Checked: {}", domain));
+        }
+    });
 }

@@ -26,33 +26,27 @@ pub async fn fetch(url: String, mut user_agent: String) -> Result<Response, Stri
 /// joins a domain and path eg www.domain.com/ + /api/v1  -> www.domain.com/api/v1
 /// domain.com/?foo= + /api/vi = domain.com/?foo=/ap/vi
 pub fn urljoin(mut url: String, path: String) -> String {
-    let mut ret: String = String::new();
-
     if !url.starts_with("https://") && !url.starts_with("http://") {
         url.insert_str(0, "https://");
     }
 
-    if path.len() == 0 {
+    if path.is_empty() {
         return url;
     }
 
-    if url.ends_with("=") {
-        return format!("{url}{path}");
-    }
-
     if url.ends_with("/") {
+        // If the path starts with a '/', just append it without adding another '/'
         if path.starts_with("/") {
-            return format!("{}{}", url, path.clone().remove(0));
+            return format!("{}{}", url, &path[1..]); // Skip the leading slash of the path
         }
-        return format!("{url}{path}");
+        return format!("{}{}", url, path); // Directly append the path
     }
 
     if path.starts_with("/") {
-        return format!("{url}{path}",);
+        return format!("{}{}", url, path); // Simply append the path
     }
 
-    return format!("{url}/{path}");
-    // could have just removed the '/' from each, but string cloning
+    return format!("{}/{}", url, path);
 }
 
 /// fetches a domain with default values

@@ -29,6 +29,7 @@ pub fn run_cmd_string(mut cmd: String) -> Option<cmd_info> {
 }
 
 /// takes a vector of strings of the full command and runs it
+/// eg run_cmd([["ls","-al"]].to_vec);
 pub fn run_cmd(mut args: Vec<&str>) -> Option<cmd_info> {
     if args.len() == 0 {
         return None;
@@ -94,19 +95,28 @@ pub fn run_piped(mut cmd1: Vec<&str>, mut cmd2: Vec<&str>) -> Option<cmd_info> {
 
     let mut cmd2_proc = Command::new(cmd2_bin)
         .args(cmd2)
-        .stdin(cmd1_proc.stdout.unwrap())
-        .spawn()
-        .expect(format!("Failed to start {}", cmd2_bin).as_str());
+        .stdin(cmd1_proc.stdout.unwrap_or_else(|| {
+            warn!("run piped: cmd1 stdout failed");
+            panic!();
+        }))
+        .output();
 
-    let mut _x = cmd2_proc
-        .wait_with_output()
-        .expect("Failed to wait on process");
+    let mut _x = match cmd2_proc {
+        Ok(ok) => ok,
+        Err(err) => panic!(
+            "error occured during running command: {}\n{}",
+            cmd2_bin,
+            err.to_string()
+        ),
+    };
+
+    println!("{:#?}", _x);
 
     let mut cmd_result: cmd_info = cmd_info {
         output: Some(_x.clone()),
         stderr: Some(String::from_utf8(_x.stderr).unwrap_or_else(|_| String::from(""))),
         stdout: Some(String::from_utf8(_x.stdout).unwrap_or_else(|_| String::from(""))),
-        status: Some(_x.status.signal().unwrap()),
+        status: Some(_x.status.signal().unwrap_or_else(|| 1)),
     };
 
     // let mut outputdata: String = String::new();
