@@ -20,15 +20,15 @@ functions in the file [ WORKING ]
 - [x] enumratedomain
 - [x] faviconmulti
 - [x] corsmisconfig
-- [] hostheaderinjection
-- [] securityheaders
-- [] networkanalyzer
-- [] waybackurls
+- [x] hostheaderinjection
+- [x] securityheaders
+- [x] networkanalyzer
+- [x] waybackurls
 - [] javascript
-- [] dns
-- [] probe
-- [] redirects
-- [] brokenlinks
+- [x] dns
+- [x] probe
+- [x] redirects
+- [x] brokenlinks
 - [] tech
 - [] smuggler
 - [] ip addresses
@@ -36,7 +36,7 @@ functions in the file [ WORKING ]
 - [] important subdomains
 - [] not found
 - [] paramspider
-- [] pathhunt
+- [x] pathhunt
 - [] nmap
 - [] api fuzzer
 - [x] shodan
@@ -91,6 +91,6 @@ functions in the file [ WORKING ]
 
 - [] smuggler
 - [] whatwaf
-- [] ~~assetfinder??? ( It's a mac os copy for macos)~~
+- [x] ~~assetfinder??? ( It's a mac os copy for macos)~~
 - [] f5bigip_scanner.py
 - [x] pathhunt.py

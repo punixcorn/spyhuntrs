@@ -74,6 +74,7 @@ pub fn save_str(buffer: &str) {
     writeln!(file, "{}", buffer).unwrap();
 }
 
+/// this should probably handle logging info out before saving
 #[macro_export]
 macro_rules! handle_data {
     ($s:expr, &str) => {

@@ -9,15 +9,11 @@
 #![allow(unused_macros)]
 #![allow(unreachable_code)]
 
-use murmur3::murmur3_32;
-use serde::{de::IntoDeserializer, Deserializer};
-
 use crate::{
-    cmd_handlers,
-    cmd_handlers::cmd_info,
-    file_util::file_exists,
-    request, save_util,
-    save_util::{check_if_save, get_save_file, save_string, save_vec_strs, set_save_file},
+    cmd_handlers::{self, cmd_info, run_cmd_string, run_piped_strings},
+    file_util::{file_exists, read_from_file},
+    request,
+    save_util::{self, check_if_save, get_save_file, save_string, save_vec_strs, set_save_file},
 };
 // above all
 use {
@@ -28,11 +24,16 @@ use {
     },
     colored::Colorize,
     dns_lookup::lookup_addr,
+    murmur3::murmur3_32,
     murmur3::murmur3_x64_128,
+    rand::random,
     rayon::prelude::*,
     reqwest::{dns::Resolve, header, ClientBuilder, Response},
+    reqwest::{header::HeaderValue, Proxy},
+    serde::{de::IntoDeserializer, Deserializer},
     shodan_client::*,
     soup::pattern::Pattern,
+    std::{clone, process::Output},
     std::{
         error::Error,
         fmt::format,
@@ -343,4 +344,509 @@ pub async fn run_cors_misconfig_threads(domains: Vec<&str>) -> () {
             info!(format!("Checked: {}", domain));
         }
     });
+}
+
+/// you can either pass in a [proxy] or a [proxy file name] as the [proxy]
+/// but you need to specify if its a proxy_file using the boolean [is_proxy_file]
+/// need fix [completed]
+/// # example
+/// ```rust
+/// let x : Vec<String> = setup_proxies("socks5://127.0.0.1:8095",false).unwrap;
+/// let y : Vec<String> = setup_proxies("proxies.txt",true).unwrap;
+/// ```
+pub fn setup_proxies(proxy: String, is_proxy_file: bool) -> Option<Vec<String>> {
+    let mut proxies: Vec<String> = vec![];
+    let mut ret_proxies: Vec<String> = vec![];
+
+    if proxy.is_empty() {
+        return None;
+    }
+
+    if is_proxy_file {
+        match read_from_file(proxy) {
+            Ok(data) => {
+                proxies = data.clone();
+            }
+            Err(_) => return None,
+        };
+    } else {
+        proxies.push(proxy);
+    };
+
+    let protocols = vec!["http://", "https://", "socks4://", "socks5://"];
+    let mut trip = false;
+    for __proxy in proxies {
+        for __protocol in &protocols {
+            if __proxy.starts_with(__protocol) {
+                trip = true;
+            }
+        }
+
+        if trip {
+            ret_proxies.push(__proxy);
+        } else {
+            ret_proxies.push(format!("http://{__proxy}"));
+        }
+        trip = false;
+    }
+
+    return Some(ret_proxies);
+}
+
+/// checks for host header injection for the domain [domain]
+/// [proxy] & [proxyfile] is passed into [setup_proxies(...)] [completed]
+/// # Example
+/// ```rust
+/// check_host_header_injection("www.example.com","proxies.txt",false);
+/// check_host_header_injection("www.example.com","socks5://127.0.0.1:8095",false);
+/// ```
+pub async fn check_host_header_injection(domain: String, proxy: String, is_proxy_file: bool) {
+    // Prepare headers
+    let evil: HeaderValue = "evil.com".to_string().parse().unwrap();
+
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(reqwest::header::HOST, evil.clone());
+    headers.insert("X-Fowarded-Host", evil.clone());
+    headers.insert("X-Fowarded-For", evil.clone());
+    headers.insert("X-Client-Ip", evil.clone());
+    headers.insert("X-Remote-Ip", evil.clone());
+    headers.insert("X-Remote-Addr", evil.clone());
+    headers.insert("X-Host", evil.clone());
+
+    let proxy = setup_proxies(proxy, is_proxy_file).unwrap();
+
+    let mut curr_proxy: Proxy;
+
+    // this is ignored, throw an error if a proxy doesn't exist
+    // if !proxy.is_empty() {
+    //     curr_proxy = reqwest::Proxy::http(proxy[0].clone()).unwrap();
+    // };
+    //
+
+    // make this fetch a random proxy
+    curr_proxy = reqwest::Proxy::http(proxy[0].clone()).unwrap();
+
+    let client = reqwest::Client::builder()
+        .proxy(curr_proxy)
+        .danger_accept_invalid_certs(true)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(std::time::Duration::new(5, 0))
+        .build()
+        .unwrap_or_else(|err| {
+            warn!(format!("unable to create Client Session\n{}", err));
+            panic!();
+        });
+
+    let normal_response_text: String = client
+        .get(request::urljoin(domain.clone(), "".to_string()))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    for h in &headers {
+        let resp = client
+            .get(request::urljoin(domain.clone(), "".to_string()))
+            .header(h.0, h.1)
+            .send()
+            .await;
+
+        match &resp {
+            Ok(response) => {
+                match response.status().as_u16() {
+                    301 | 302 | 303 | 307 | 308 => {
+                        match response.headers().get(header::LOCATION) {
+                            Some(headervalue) => {
+                                match headervalue.to_str() {
+                                    Ok(value) => {
+                                        if value.to_lowercase() == "evil.com" {
+                                            info!("vulnerable");
+                                        }
+                                    }
+                                    Err(_) => {
+                                        warn!(format!("{domain} : fetching string vaule from Location header failed"));
+                                    }
+                                };
+                            }
+                            _ => {
+                                warn!(format!("{domain} : No Location header found"));
+                            }
+                        };
+                    }
+                    _ => {
+                        warn!(format!("{domain} : failed to retrieve response code"));
+                    }
+                };
+            }
+            _ => {
+                warn!(format!("request to {domain} failed"));
+            }
+        }
+
+        match resp {
+            Ok(response) => match response.text().await {
+                Ok(response_text) => {
+                    if response_text != normal_response_text {
+                        if response_text.to_lowercase().contains("evil.com") {
+                            info!("vulnerable");
+                        }
+                    }
+                }
+                Err(_) => {
+                    warn!(format!("{domain} : No text data found"));
+                }
+            },
+            Err(_) => warn!(format!("{domain} : Failed to convert response to text")),
+        }
+    }
+}
+
+pub async fn check_security_headers(domain: String) {
+    let security_headers = [
+        "Strict-Transport-Security",
+        "Content-Security-Policy",
+        "X-Frame-Options",
+        "X-Content-Type-Options",
+        "X-XSS-Protection",
+    ];
+
+    let Session = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(std::time::Duration::new(5, 0))
+        .build()
+        .unwrap_or_else(|err| {
+            warn!(format!("unable to create Client Session\n{}", err));
+            panic!();
+        });
+
+    let mut no_sec: Vec<String> = vec![];
+    let mut found_hd: Vec<String> = vec![];
+    let mut no_dup: Vec<String> = vec![];
+    let mut no_dup_found: Vec<String> = vec![];
+    let resp = Session
+        .get(request::urljoin(domain.clone(), "".to_string()))
+        .send()
+        .await;
+
+    match resp {
+        Ok(data) => {
+            let __headers = data.headers().clone();
+
+            for (key, value) in __headers {
+                let h = key.unwrap().as_str().to_string();
+                match h.to_lowercase().as_str() {
+                    "strict-transport-security" => {
+                        info!(format!(
+                            "{domain} : Found Security Header {}",
+                            security_headers[0]
+                        ));
+                        handle_data!(format!("{domain} : {}", security_headers[0]), String);
+                    }
+                    "content-security-policy" => {
+                        info!(format!(
+                            "{domain} : Found Security Header {}",
+                            security_headers[0]
+                        ));
+                        handle_data!(format!("{domain} : {}", security_headers[1]), String);
+                    }
+                    "x-frame-options" => {
+                        info!(format!(
+                            "{domain} : Found Security Header {}",
+                            security_headers[0]
+                        ));
+                        handle_data!(format!("{domain} : {}", security_headers[2]), String);
+                    }
+                    "x-content-type-options" => {
+                        info!(format!(
+                            "{domain} : Found Security Header {}",
+                            security_headers[0]
+                        ));
+                        handle_data!(format!("{domain} : {}", security_headers[3]), String);
+                    }
+                    "x-xss-protection" => {
+                        info!(format!(
+                            "{domain} : Found Security Header {}",
+                            security_headers[0]
+                        ));
+                        handle_data!(format!("{domain} : {}", security_headers[4]), String);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Err(_) => {
+            warn!(format!("{domain}: failed to make request"));
+        }
+    }
+}
+
+/// run network analyzer using shodan
+///
+pub fn network_analyzer(domain: String) {
+    match run_cmd_string(format!("shodan stats --facets port net:{}", domain)) {
+        Some(data) => match data.stdout {
+            Some(out) => {
+                info!(format!("{out}"));
+                handle_data!(format!("{out}"), String);
+            }
+            _ => match data.stderr {
+                Some(out) => warn!(format!("stderr : {out}")),
+                _ => {
+                    warn!(format!(
+                        "running shodan on {} failed, no output",
+                        domain.clone()
+                    ));
+                }
+            },
+        },
+        _ => {
+            warn!(format!("running shodan on {} failed", domain.clone()));
+        }
+    };
+
+    match run_cmd_string(format!("shodan stats --facets vuln net:{}", domain)) {
+        Some(data) => match data.stdout {
+            Some(out) => {
+                info!(format!("{out}"));
+                handle_data!(format!("{out}"), String);
+            }
+            _ => match data.stderr {
+                Some(out) => warn!(format!("stderr : {out}")),
+                _ => {
+                    warn!(format!(
+                        "running shodan on {} failed, no output",
+                        domain.clone()
+                    ));
+                }
+            },
+        },
+        _ => {
+            warn!(format!("running shodan on {} failed", domain.clone()));
+        }
+    };
+}
+
+/// run waybackurl on [domain]
+pub fn wayback_urls(domain: String) {
+    match run_piped_strings(format!("waybackurls {}", domain), format!("anew")) {
+        Some(data) => match data.stdout {
+            Some(out) => {
+                info!(format!("{out}"));
+                handle_data!(format!("{out}"), String);
+            }
+            _ => match data.stderr {
+                Some(out) => warn!(format!("stderr : {out}")),
+                _ => {
+                    warn!(format!(
+                        "running waybackurls on {} failed, no output",
+                        domain.clone()
+                    ));
+                }
+            },
+        },
+        _ => {
+            warn!(format!("running waybackurls on {} failed", domain.clone()));
+        }
+    };
+}
+
+/// a namespace for javascript functions
+mod javascript {}
+
+/// run a dns scan on domain
+pub fn dns(domain: String) {
+    let commands: Vec<_> = vec!["-ns -resp", "-cname -resp", "-a -resp"];
+    let mut place = 0;
+    for cmd in &commands {
+        match place {
+            0 => {
+                info!("Printing A records");
+                handle_data!(format!("{domain}: A records"), String);
+            }
+            1 => {
+                info!("Printing NS records");
+                handle_data!(format!("{domain}: NS records"), String);
+            }
+            2 => {
+                info!("Printing CNAME records");
+                handle_data!(format!("{domain}: CNAME records"), String);
+            }
+            _ => {}
+        };
+        match run_piped_strings(format!("echo {}", domain), format!("dnsx -slient {}", cmd)) {
+            Some(data) => match data.stdout {
+                Some(out) => {
+                    info!(format!("{out}"));
+                    handle_data!(format!("{out}"), String);
+                }
+                _ => match data.stderr {
+                    Some(out) => warn!(format!("stderr : {out}")),
+                    _ => {
+                        warn!(format!(
+                            "running dnsx on {} failed, no output",
+                            domain.clone()
+                        ));
+                    }
+                },
+            },
+            _ => {
+                warn!(format!("running dnsx on {} failed", domain.clone()));
+            }
+        };
+    }
+}
+
+/// run httpprobe on domain
+pub fn probe(domain: String) {
+    match run_piped_strings(format!("echo {}", domain), format!("httprobe -c 100")) {
+        Some(data) => {
+            // match data.output { Some(opt) => {
+            //
+            //     }
+            //     None => {}
+            // };
+            match data.stdout {
+                Some(out) => {
+                    match run_piped_strings(format!("echo {}", out), format!("anew")) {
+                        Some(resp) => {
+                            match resp.stdout {
+                                Some(_stdout) => {
+                                    info!(format!("{_stdout}"));
+                                    handle_data!(format!("{_stdout}"), String);
+                                }
+                                None => match data.stderr {
+                                    Some(_stderr) => warn!(format!("stderr : {_stderr}")),
+                                    _ => {
+                                        warn!(format!(
+                                            "{} : running anew on httprobe output failed, could not get any output",
+                                            domain.clone()
+                                        ));
+                                    }
+                                },
+                            };
+                        }
+                        None => {
+                            warn!(format!(
+                                "{} : running anew on httprobe output failed",
+                                domain.clone()
+                            ));
+                        }
+                    };
+                }
+                _ => match data.stderr {
+                    Some(out) => warn!(format!("stderr : {out}")),
+                    _ => {
+                        warn!(format!(
+                            "running httprobe on {} failed, no output",
+                            domain.clone()
+                        ));
+                    }
+                },
+            }
+        }
+        _ => {
+            warn!(format!(
+                "running running httprobe on {} failed",
+                domain.clone()
+            ));
+        }
+    };
+}
+
+/// run httpx to check redirects on [domain]
+pub fn redirects(domain: String) {
+    match run_piped_strings(
+        format!("echo {}", domain),
+        format!("httpx -silent -location  -mc 301,302"),
+    ) {
+        Some(data) => {
+            // match data.output { Some(opt) => {
+            //
+            //     }
+            //     None => {}
+            // };
+            match data.stdout {
+                Some(out) => {
+                    match run_piped_strings(format!("echo {}", out), format!("anew")) {
+                        Some(resp) => {
+                            match resp.stdout {
+                                Some(_stdout) => {
+                                    info!(format!("{_stdout}"));
+                                    handle_data!(format!("{_stdout}"), String);
+                                }
+                                None => match data.stderr {
+                                    Some(_stderr) => warn!(format!("stderr : {_stderr}")),
+                                    _ => {
+                                        warn!(format!(
+                                            "{} : running anew on httpx output failed, could not get any output",
+                                            domain.clone()
+                                        ));
+                                    }
+                                },
+                            };
+                        }
+                        None => {
+                            warn!(format!(
+                                "{} : running anew on httpx output failed",
+                                domain.clone()
+                            ));
+                        }
+                    };
+                }
+                _ => match data.stderr {
+                    Some(out) => warn!(format!("stderr : {out}")),
+                    _ => {
+                        warn!(format!(
+                            "running httpx on {} failed, no output",
+                            domain.clone()
+                        ));
+                    }
+                },
+            }
+        }
+        _ => {
+            warn!(format!(
+                "running running httpx on {} failed",
+                domain.clone()
+            ));
+        }
+    };
+}
+
+/// check for broken links on [domain] using blc
+pub fn brokenlinks(domain: String) {
+    match run_cmd_string(format!(
+        "blc -r --filter-level 2 {}",
+        request::urljoin(domain.clone(), "".to_string())
+    )) {
+        Some(data) => match data.stdout {
+            Some(out) => {
+                info!(format!("{out}"));
+                handle_data!(format!("{out}"), String);
+            }
+            _ => match data.stderr {
+                Some(out) => warn!(format!("stderr : {out}")),
+                _ => {
+                    warn!(format!(
+                        "running blc on {} failed, no output",
+                        domain.clone()
+                    ));
+                }
+            },
+        },
+        _ => {
+            warn!(format!("running blc on {} failed", domain.clone()));
+        }
+    }
+}
+
+pub fn tech(domain: String) {
+    // publish a builtwith rs and use it
+}
+
+pub fn smuggler(domain: String) {
+    //smug_path
 }

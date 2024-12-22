@@ -1,7 +1,7 @@
 use colored::Colorize;
 
 pub fn print_simple_banner() {
-    println!("{}\n[I] @ punixcorn v0.0.1\n", "spyhuntrs".yellow());
+    println!("{} @ punixcorn v0.0.1\n", "spyhuntrs".yellow());
 }
 pub fn print_banner() {
     let banner = r#"
@@ -17,5 +17,5 @@ pub fn print_banner() {
                   ░ ░                                                            
 "#;
 
-    println!("{}\n[I] @ punixcorn v0.0.1\n", banner.yellow());
+    println!("{}\n@ punixcorn v0.0.1\n", banner.yellow());
 }

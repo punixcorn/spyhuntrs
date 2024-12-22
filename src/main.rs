@@ -14,8 +14,8 @@ use rayon::prelude::*;
 use reqwest::{dns::Resolve, header, ClientBuilder, Response};
 use save_util::{check_if_save, get_save_file, save_string, save_vec_strs, set_save_file};
 use spyhunt_util::{
-    check_cors_misconfig, get_favicon_hash, run_cors_misconfig_threads, status_code,
-    status_code_reqwest,
+    brokenlinks, check_cors_misconfig, get_favicon_hash, network_analyzer, probe, redirects,
+    run_cors_misconfig_threads, status_code, status_code_reqwest,
 };
 
 use std::{
@@ -46,10 +46,15 @@ mod waybackmachine;
 async fn main() -> Result<(), Box<dyn Error>> {
     banner::print_simple_banner();
     let target: String = "en.wikipedia.org".to_string();
+    let domain: String = target.clone();
     let domains = ["google.com", "food.com", "en.wikipedia.com"];
     if check_if_save() {
         set_save_file("newfile.txt");
     }
+    /* Todo!
+     * Test all functions
+     */
+
     // let agent = user_agents::get_user_agent(true, false).await;
     // assert!(agent.len() != 0);
     // pathhunt::scan_target(&target).await.unwrap();
@@ -70,10 +75,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     //run_cors_misconfig_threads(domains.to_vec()).await;
     // let x = favicon::init();
     // println!("{:#?}", x);
-    match get_favicon_hash("https://www.skype.com/en/".to_string()).await {
-        Some(k) => println!("{:#?}", k),
-        None => (),
-    };
-
+    // match get_favicon_hash("https://www.skype.com/en/".to_string()).await {
+    //     Some(k) => println!("{:#?}", k),
+    //     None => (),
+    // };
+    probe(domain);
+    // network_analyzer(target);
+    // redirects(target);
+    // brokenlinks(target);
     Ok(())
 }

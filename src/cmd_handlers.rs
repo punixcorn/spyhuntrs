@@ -110,7 +110,7 @@ pub fn run_piped(mut cmd1: Vec<&str>, mut cmd2: Vec<&str>) -> Option<cmd_info> {
         ),
     };
 
-    println!("{:#?}", _x);
+    //println!("{:#?}", _x);
 
     let mut cmd_result: cmd_info = cmd_info {
         output: Some(_x.clone()),
