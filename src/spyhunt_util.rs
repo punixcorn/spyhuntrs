@@ -14,6 +14,7 @@ use crate::{
     file_util::{file_exists, read_from_file},
     request,
     save_util::{self, check_if_save, get_save_file, save_string, save_vec_strs, set_save_file},
+    user_agents::get_user_agent_prexisting,
 };
 // above all
 use {
@@ -33,6 +34,7 @@ use {
     serde::{de::IntoDeserializer, Deserializer},
     shodan_client::*,
     soup::pattern::Pattern,
+    std::net::ToSocketAddrs,
     std::{clone, process::Output},
     std::{
         error::Error,
@@ -46,27 +48,26 @@ use {
 };
 
 /// get the ip for a domain [Completed]
-fn get_revese_ip(domain: Vec<&str>) -> Option<String> {
-    for d in domain {
-        let ips: Option<Vec<_>> = match dns_lookup::lookup_host(d) {
-            Ok(ips) => Some(ips),
-            _ => None,
-        };
-        match ips {
-            Some(ip) => {
-                match ip.get(0) {
-                    Some(v4) => {
-                        let ip_v4 = v4.to_string();
-                        info!(format!("{d} : [{ip_v4}]"));
-                        handle_data!(ip_v4, String);
+pub fn get_reverse_ip(ip: Vec<&str>) {
+    for d in ip {
+        let ip_addr: Result<IpAddr, _> = d.parse();
+        match ip_addr {
+            Ok(data) => {
+                match lookup_addr(&data) {
+                    Ok(d_name) => {
+                        info_and_handle_data!(format!("{d} {d_name}"), String);
                     }
-                    _ => warn!(format!("could not parse data gotten from lookup for {}", d)),
+                    _ => {
+                        warn!(format!("{d} : Could not get domain name"));
+                    }
                 };
             }
-            _ => warn!(format!("no ip gotten for {}", d)),
+            _ => {
+                warn!(format!("{d} : is not a valid ip"));
+                continue;
+            }
         };
     }
-    None
 }
 
 /// find subdomains using shodan [completed]
@@ -920,6 +921,156 @@ pub mod tech {
     }
 }
 
-pub fn smuggler(domain: String) {
-    //smug_path
+pub fn smuggler(domain: String) {}
+
+pub fn ip_addresses(domain: Vec<String>) {
+    for d in &domain {
+        let ips: Option<Vec<_>> = match dns_lookup::lookup_host(d) {
+            Ok(ips) => Some(ips),
+            _ => None,
+        };
+        match ips {
+            Some(ip) => {
+                match ip.get(0) {
+                    Some(v4) => {
+                        let ip_v4 = v4.to_string();
+                        info!(format!("{d} : [{ip_v4}]"));
+                        handle_data!(ip_v4, String);
+                    }
+                    _ => warn!(format!("could not parse data gotten from lookup for {}", d)),
+                };
+            }
+            _ => warn!(format!("no ip gotten for {}", d)),
+        };
+    }
 }
+
+/// checks for important subdomains in a file or subdomains [completed]
+pub fn importantsubdomains(subdomain_file: String) {
+    if !file_exists(&subdomain_file) {
+        err!(format!("{subdomain_file} not found"));
+    }
+    let mut importantsubs: Vec<&str> = vec![];
+    let info: Vec<_> = vec![
+        "admin", "dev", "test", "api", "staging", "prod", "beta", "manage", "jira", "github",
+    ];
+    match read_from_file(subdomain_file.clone()) {
+        Ok(subs) => {
+            for sub in &subs {
+                for i in &info {
+                    if sub.contains(i) {
+                        importantsubs.push(sub);
+                        break;
+                    }
+                }
+            }
+
+            if importantsubs.is_empty() {
+                warn!(format!("No important subdomain found"));
+                return;
+            }
+            for i in importantsubs {
+                info_and_handle_data!(format!("{i}"), String);
+            }
+        }
+        Err(_) => {
+            warn!(format!("error reading from file {subdomain_file}"));
+        }
+    };
+}
+
+/// finds all subdomains in the [domains_file] that returns a 404 [compeleted]
+pub async fn find_not_found(domains_file: String) {
+    let mut not_found_domains: Vec<String> = vec![];
+    let user_agent = get_user_agent_prexisting();
+    let Session = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(std::time::Duration::new(5, 0))
+        .user_agent(user_agent)
+        .build()
+        .unwrap_or_else(|err| {
+            warn!(format!("unable to create Client Session\n{}", err));
+            panic!();
+        });
+
+    if !file_exists(&domains_file) {
+        err!(format!("{domains_file} does not exist"));
+    }
+
+    match read_from_file(domains_file) {
+        Ok(data) => {
+            for sub in data {
+                match Session.get(sub.clone()).send().await {
+                    Ok(resp) => {
+                        if resp.status().as_u16() == 404 {
+                            not_found_domains.push(sub);
+                        }
+                    }
+                    Err(_) => {
+                        warn!(format!("{sub} : could not make request"));
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            err!("Could not read from file provided");
+        }
+    }
+    if not_found_domains.is_empty() {
+        warn!(format!("no 404 subdomain found"));
+    }
+    for sub in &not_found_domains {
+        info_and_handle_data!(format!("{sub} : 404 [NOT FOUND]"), String);
+    }
+}
+
+pub fn paramspider(domain: String) {
+    match run_cmd_string(format!("paramspider -d {domain}")) {
+        Some(data) => match data.stdout {
+            Some(out) => {
+                info!(format!("{out}"));
+                handle_data!(format!("{out}"), String);
+            }
+            _ => match data.stderr {
+                Some(out) => warn!(format!("stderr : {out}")),
+                _ => {
+                    warn!(format!(
+                        "running paramspider on {} failed, no output",
+                        domain.clone()
+                    ));
+                }
+            },
+        },
+        _ => {
+            warn!(format!("running paramspider on {} failed", domain.clone()));
+        }
+    }
+}
+
+/// run nmap on ip or domain [completed]
+pub fn nmap(domain: String) {
+    let ip = match run_cmd_string(format!("nmap -vvv {domain} -sV")) {
+        Some(data) => match data.stdout {
+            Some(out) => {
+                info!(format!("{out}"));
+                handle_data!(format!("{out}"), String);
+            }
+            _ => match data.stderr {
+                Some(out) => warn!(format!("stderr : {out}")),
+                _ => {
+                    warn!(format!(
+                        "running nmap on {} failed, no output",
+                        domain.clone()
+                    ));
+                }
+            },
+        },
+        _ => {
+            warn!(format!("running nmap on {} failed", domain.clone()));
+        }
+    };
+}
+
+/// i dunno what it does that others don't do
+fn api_fuzzer() {}

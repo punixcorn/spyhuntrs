@@ -29,15 +29,15 @@ functions in the file [ WORKING ]
 - [x] probe
 - [x] redirects
 - [x] brokenlinks
-- [] tech
+- [x] tech
 - [] smuggler
-- [] ip addresses
-- [] domain info
-- [] important subdomains
-- [] not found
-- [] paramspider
+- [x] ip addresses
+- [x] domain info
+- [x] important subdomains
+- [x] not found
+- [x] paramspider
 - [x] pathhunt
-- [] nmap
+- [x] nmap
 - [] api fuzzer
 - [x] shodan
 - [] forbiddenpass

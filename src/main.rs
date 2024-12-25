@@ -15,8 +15,8 @@ use reqwest::{dns::Resolve, header, ClientBuilder, Response};
 use save_util::{check_if_save, get_save_file, save_string, save_vec_strs, set_save_file};
 use serde_json::to_string;
 use spyhunt_util::{
-    brokenlinks, check_cors_misconfig, get_favicon_hash, network_analyzer, probe, redirects,
-    run_cors_misconfig_threads, status_code, status_code_reqwest, tech,
+    brokenlinks, check_cors_misconfig, get_favicon_hash, get_reverse_ip, network_analyzer, probe,
+    redirects, run_cors_misconfig_threads, status_code, status_code_reqwest, tech::find_tech,
 };
 
 use std::{
@@ -34,7 +34,6 @@ mod logging;
 mod save_util;
 // save to file
 mod banner;
-mod builtwith;
 mod cmd_handlers;
 mod favicon;
 mod file_util;
@@ -85,6 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // network_analyzer(target);
     // redirects(target);
     // brokenlinks(target);
-    tech::find_tech("en.wikipedia.com".to_string()).await;
+    // find_tech("en.wikipedia.com".to_string()).await;
+    get_reverse_ip(["8.8.8.8"].to_vec());
     Ok(())
 }
