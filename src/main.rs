@@ -13,9 +13,10 @@ use colored::Colorize;
 use rayon::prelude::*;
 use reqwest::{dns::Resolve, header, ClientBuilder, Response};
 use save_util::{check_if_save, get_save_file, save_string, save_vec_strs, set_save_file};
+use serde_json::to_string;
 use spyhunt_util::{
     brokenlinks, check_cors_misconfig, get_favicon_hash, network_analyzer, probe, redirects,
-    run_cors_misconfig_threads, status_code, status_code_reqwest,
+    run_cors_misconfig_threads, status_code, status_code_reqwest, tech,
 };
 
 use std::{
@@ -33,6 +34,7 @@ mod logging;
 mod save_util;
 // save to file
 mod banner;
+mod builtwith;
 mod cmd_handlers;
 mod favicon;
 mod file_util;
@@ -45,7 +47,7 @@ mod waybackmachine;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     banner::print_simple_banner();
-    let target: String = "en.wikipedia.org".to_string();
+    let target: String = "hotelscombined.com".to_string(); //"en.wikipedia.org".to_string();
     let domain: String = target.clone();
     let domains = ["google.com", "food.com", "en.wikipedia.com"];
     if check_if_save() {
@@ -79,9 +81,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     //     Some(k) => println!("{:#?}", k),
     //     None => (),
     // };
-    probe(domain);
+    // probe(domain);
     // network_analyzer(target);
     // redirects(target);
     // brokenlinks(target);
+    tech::find_tech("en.wikipedia.com".to_string()).await;
     Ok(())
 }

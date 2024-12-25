@@ -843,8 +843,81 @@ pub fn brokenlinks(domain: String) {
     }
 }
 
-pub fn tech(domain: String) {
-    // publish a builtwith rs and use it
+pub mod tech {
+    use crate::request;
+    use crate::save_util::{self, check_if_save};
+    use reqwest::Error;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Deserialize, Debug)]
+    pub struct ApiResponse {
+        pub first: i64,
+        pub last: i64,
+        pub domain: String,
+        pub groups: Vec<Group>,
+    }
+
+    #[derive(Deserialize, Debug)]
+    pub struct Group {
+        pub name: String,
+        pub live: i32,
+        pub dead: i32,
+        pub latest: i64,
+        pub oldest: i64,
+        pub categories: Vec<Category>,
+    }
+
+    #[derive(Deserialize, Debug)]
+    pub struct Category {
+        pub live: i32,
+        pub dead: i32,
+        pub latest: i64,
+        pub oldest: i64,
+        pub name: String,
+    }
+
+    use colored::Colorize;
+    /// find technology used in domain, using free api builtwith.com
+    /// [completed]
+    pub async fn find_tech(domain: String) {
+        // publish a builtwith rs and use it
+        let url = format!("https://api.builtwith.com/free1/api.json?KEY=d6c5879a-905a-4ba1-b82d-aad6576f93c3&LOOKUP={}",domain);
+        println!("{url}");
+        let Session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            });
+
+        let resp = Session.get(url).send().await;
+        match resp {
+            Ok(json) => match json.json::<ApiResponse>().await {
+                Ok(ds) => {
+                    info_and_handle_data!(format!("{domain}"), String);
+                    for i in &ds.groups {
+                        println!("-{}", i.name);
+                        handle_data!(format!("-{}", i.name), String);
+                        for j in &i.categories {
+                            println!(" |-{}", i.name);
+                            handle_data!(format!(" |-{}", i.name), String);
+                        }
+                    }
+                }
+                Err(_) => {
+                    warn!(format!("{domain} : error parsing json, No data recieved, check network or domain name"));
+                }
+            },
+            Err(_) => {
+                warn!(format!(
+                    "{domain} : error occured fetching data from builtwith.com"
+                ));
+            }
+        };
+    }
 }
 
 pub fn smuggler(domain: String) {

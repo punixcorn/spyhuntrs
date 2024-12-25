@@ -101,6 +101,40 @@ macro_rules! handle_data {
     };
 }
 
+#[macro_export]
+macro_rules! info_and_handle_data {
+    ($s:expr, &str) => {
+        info!(format!("{}", $s));
+        if check_if_save() {
+            save_util::save_str($s)
+        }
+    };
+    ($s:expr,String) => {
+        info!($s);
+        if check_if_save() {
+            save_util::save_string($s)
+        }
+    };
+
+    ($vec: expr,Vec<&str>) => {
+        for i in $vec {
+            info!(format!("{i}"));
+        }
+        if check_if_save() {
+            save_util::save_vec_strs($vec);
+        }
+    };
+
+    ($vec:expr, Vec<String>) => {
+        for i in $vec {
+            info!(format!("{i}"));
+        }
+        if check_if_save() {
+            save_util::save_vec_strings($vec);
+        }
+    };
+}
+
 /*
 pub struct saveinfo {
     pub file_name: &'static str,
