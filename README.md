@@ -2,15 +2,23 @@
 
 Everything in **spyhunt** but with a better save feature and written (poorly) in rust!
 
+# Important stuff to do
+
+- [x] Tests [no Compeleted]
+- [] better error handling (for requests)
+- [] Documentation
+- [] rename files
+- [] better error handling for tests capture
+
 # Spyhunt.py Porting List
 
 - [] cli handling
 
 # Main file
 
-functions in the file [ WORKING ]
+functions in the file [ WORKING 30/54 ]
 
-- [] update
+- [x] ~~update~~ won't do it
 - [x] save/s
 - [x] reverseip
 - [x] reverseipmulti
@@ -38,11 +46,11 @@ functions in the file [ WORKING ]
 - [x] paramspider
 - [x] pathhunt
 - [x] nmap
-- [] api fuzzer
+- [x] api fuzzer
 - [x] shodan
-- [] forbiddenpass
-- [] directorybrute
-- [] nuclei lfi
+- [x] forbiddenpass
+- [x] directorybrute
+- [x] nuclei lfi
 - [] google
 - [] cidr notation
 - [] print all ips

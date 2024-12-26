@@ -10,12 +10,13 @@
 #![allow(unreachable_code)]
 
 use crate::{
-    cmd_handlers::{self, cmd_info, run_cmd_string, run_piped_strings},
+    cmd_handlers::{self, cmd_info, run_cmd, run_cmd_string, run_piped_strings},
     file_util::{file_exists, read_from_file},
     request,
     save_util::{self, check_if_save, get_save_file, save_string, save_vec_strs, set_save_file},
     user_agents::get_user_agent_prexisting,
 };
+
 // above all
 use {
     base64::{
@@ -30,15 +31,20 @@ use {
     rand::random,
     rayon::prelude::*,
     reqwest::{dns::Resolve, header, ClientBuilder, Response},
+    reqwest::{header::HeaderMap, StatusCode},
     reqwest::{header::HeaderValue, Proxy},
     serde::{de::IntoDeserializer, Deserializer},
+    serde_json::to_vec,
     shodan_client::*,
+    soup::pattern,
     soup::pattern::Pattern,
     std::net::ToSocketAddrs,
     std::{clone, process::Output},
     std::{
+        collections::HashMap,
         error::Error,
         fmt::format,
+        io::{BufRead, Stdin},
         net::{IpAddr, SocketAddr},
         path::{self, Path, PathBuf},
         str::{FromStr, SplitTerminator},
@@ -47,27 +53,34 @@ use {
     },
 };
 
-/// get the ip for a domain [Completed]
-pub fn get_reverse_ip(ip: Vec<&str>) {
+/// get the domain name for the ip [ip] [Completed]
+/// # Example
+/// ```rust
+/// get_reverse_ip(["8.8.8.8"].to_vec());
+/// ```
+pub fn get_reverse_ip(ip: Vec<&str>) -> Option<()> {
     for d in ip {
         let ip_addr: Result<IpAddr, _> = d.parse();
         match ip_addr {
             Ok(data) => {
-                match lookup_addr(&data) {
+                match dns_lookup::lookup_addr(&data) {
                     Ok(d_name) => {
                         info_and_handle_data!(format!("{d} {d_name}"), String);
                     }
                     _ => {
                         warn!(format!("{d} : Could not get domain name"));
+                        return None;
                     }
                 };
             }
             _ => {
                 warn!(format!("{d} : is not a valid ip"));
+                return None;
                 continue;
             }
         };
     }
+    Some(())
 }
 
 /// find subdomains using shodan [completed]
@@ -109,7 +122,7 @@ pub async fn shodan_api(api_key: String, domain: String, extract_domain_only: bo
 }
 
 /// find subdomains in a domain [completed]
-pub async fn subdomain_finder(domain: Vec<&str>) {
+pub async fn subdomain_finder(domain: Vec<&str>) -> Option<()> {
     let certsh_path = " ./scripts/certsh.sh".to_string();
     let spotter_path = "./scripts/spotter.sh".to_string();
 
@@ -162,40 +175,85 @@ pub async fn subdomain_finder(domain: Vec<&str>) {
     run_scripts(spotter_path);
     // run certsh
     run_scripts(certsh_path);
+    Some(())
 }
 
 /// perform a webcrawl using hakrawler [completed]
-pub fn webcrawler(domain: Vec<&str>) {
+pub fn webcrawler(domain: Vec<&str>) -> Option<()> {
     for d in domain {
-        let cmd = cmd_handlers::run_piped_strings(
-            format!("echo {}", d),
-            format!("hakrawler >> {}", get_save_file()),
-        );
+        let cmd = cmd_handlers::run_piped_strings(format!("echo {}", d), format!("hakrawler"));
+        match cmd {
+            Some(data) => {
+                match data.stdout {
+                    Some(x) => {
+                        for i in x.split('\n').into_iter() {
+                            info!(format!("{}\n", i));
+                            handle_data!(i, &str);
+                        }
+                    }
+                    None => {
+                        warn!(format!("{d} : error occured"));
+                        return None;
+                    }
+                };
+            }
+            None => {
+                warn!(format!("{d} : error occured"));
+                return None;
+            }
+        }
     }
+    Some(())
 }
 
 /// get status code of domain using httpx [completed]
-pub fn status_code(domain: &str) {
+pub fn status_code(domain: &str) -> Option<()> {
     let xmd = cmd_handlers::run_piped_strings(
         format!("echo {}", domain),
         "httpx -silent -status-code".to_string(),
     );
 
     match xmd {
-        Some(srt) => {
-            let x = srt
-                .stdout
-                .clone()
-                .unwrap_or_else(|| format!("{domain} [err]"));
-            info!(x);
-            handle_data!(x, String);
+        Some(data) => {
+            match data.stdout {
+                Some(x) => {
+                    info!(format!("{}\n", x));
+                    handle_data!(&x, &str);
+                }
+                None => match data.stderr {
+                    Some(y) => {
+                        warn!(format!("{domain} : {y}"));
+                    }
+                    _ => {
+                        warn!(format!("{domain} : httpx failed to get stdout"));
+                        return None;
+                    }
+                },
+            };
         }
-        _ => warn!(format!("err occured for {domain}")),
+        None => {
+            warn!(format!("{domain} : error occured on httpx"));
+            return None;
+        }
     }
+
+    //
+    // match xmd {
+    //     Some(srt) => {
+    //         let x = srt
+    //             .stdout
+    //             .clone()
+    //             .unwrap_or_else(|| format!("{domain} [err]"));
+    //         info!(x);
+    //         handle_data!(x, String);
+    //     }
+    //     _ => warn!(format!("err occured for {domain}")),
+    // }
+    Some(())
 }
 
 /// get status code of domain using reqwest [completed]
-pub async fn status_code_reqwest(domain: &str) {
+pub async fn status_code_reqwest(domain: &str) -> Option<()> {
     let d = domain.trim().replace("https://", "").replace("http://", "");
     let mut code: u16 = 0;
     let resp = fetch_url!(domain.to_string());
@@ -204,8 +262,12 @@ pub async fn status_code_reqwest(domain: &str) {
             info!(format!("{d} [{}]", data.status().as_u16()));
             handle_data!(format!("{d} [{}]", data.status().as_u16()), String);
         }
-        Err(_) => warn!(format!("{d} [no infomation]")),
+        Err(_) => {
+            warn!(format!("{d} [no infomation]"));
+            return None;
+        }
     };
+    Some(())
 }
 
 /// enumate domain for server info and ip [completed]
@@ -923,7 +985,8 @@ pub mod tech {
 
 pub fn smuggler(domain: String) {}
 
-pub fn ip_addresses(domain: Vec<String>) {
+/// get ip for domain [domain]
+pub fn ip_addresses(domain: Vec<String>) -> Option<()> {
     for d in &domain {
         let ips: Option<Vec<_>> = match dns_lookup::lookup_host(d) {
             Ok(ips) => Some(ips),
@@ -937,12 +1000,19 @@ pub fn ip_addresses(domain: Vec<String>) {
                         info!(format!("{d} : [{ip_v4}]"));
                         handle_data!(ip_v4, String);
                     }
-                    _ => warn!(format!("could not parse data gotten from lookup for {}", d)),
+                    _ => {
+                        warn!(format!("could not parse data gotten from lookup for {}", d));
+                        return None;
+                    }
                 };
             }
-            _ => warn!(format!("no ip gotten for {}", d)),
+            _ => {
+                warn!(format!("no ip gotten for {}", d));
+                return None;
+            }
         };
     }
+    Some(())
 }
 
 /// checks for important subdomains in a file or subdomains [completed]
@@ -980,7 +1050,7 @@ pub fn importantsubdomains(subdomain_file: String) {
 }
 
 /// finds all subdomains in the [domains_file] that returns a 404 [compeleted]
-pub async fn find_not_found(domains_file: String) {
+pub async fn find_not_found(domains_file: String) -> Option<()> {
     let mut not_found_domains: Vec<String> = vec![];
     let user_agent = get_user_agent_prexisting();
     let Session = reqwest::Client::builder()
@@ -1009,12 +1079,14 @@ pub async fn find_not_found(domains_file: String) {
                     }
                     Err(_) => {
                         warn!(format!("{sub} : could not make request"));
+                        return None;
                     }
                 }
             }
         }
         Err(_) => {
             err!("Could not read from file provided");
+            return None;
         }
     }
     if not_found_domains.is_empty() {
@@ -1023,33 +1095,51 @@ pub async fn find_not_found(domains_file: String) {
     for sub in &not_found_domains {
         info_and_handle_data!(format!("{sub} : 404 [NOT FOUND]"), String);
     }
+    Some(())
 }
 
-pub fn paramspider(domain: String) {
+/// run paramspider on domain [completed]
+pub fn paramspider(domain: String) -> Option<()> {
     match run_cmd_string(format!("paramspider -d {domain}")) {
         Some(data) => match data.stdout {
             Some(out) => {
                 info!(format!("{out}"));
                 handle_data!(format!("{out}"), String);
+                match data.stderr {
+                    Some(out) => {
+                        if out.contains("SyntaxWarning: invalid escape sequence") {
+                            for line in out.split('\n').collect::<Vec<_>>() {
+                                if line.contains("SyntaxWarning: invalid escape sequence") {
+                                    continue;
+                                }
+                                info_and_handle_data!(format!("{line}"), String);
+                            }
+                        }
+                    }
+                    None => {}
+                }
             }
-            _ => match data.stderr {
+            None => match data.stderr {
                 Some(out) => warn!(format!("stderr : {out}")),
                 _ => {
                     warn!(format!(
                         "running paramspider on {} failed, no output",
                         domain.clone()
                     ));
+                    return None;
                 }
             },
         },
         _ => {
             warn!(format!("running paramspider on {} failed", domain.clone()));
+            return None;
         }
     }
+    Some(())
 }
 
 /// run nmap on ip or domain [completed]
-pub fn nmap(domain: String) {
+pub fn nmap(domain: String) -> Option<()> {
     let ip = match run_cmd_string(format!("nmap -vvv {domain} -sV")) {
         Some(data) => match data.stdout {
             Some(out) => {
@@ -1063,14 +1153,369 @@ pub fn nmap(domain: String) {
                         "running nmap on {} failed, no output",
                         domain.clone()
                     ));
+                    return None;
                 }
             },
         },
         _ => {
             warn!(format!("running nmap on {} failed", domain.clone()));
+            return None;
         }
     };
+    Some(())
 }
 
 /// i dunno what it does that others don't do
-fn api_fuzzer() {}
+async fn api_fuzzer(domain: String) -> Option<()> {
+    let error_patterns: Vec<_> = vec![
+        "404",
+        "Page Not Found",
+        "Not Found",
+        "Error 404",
+        "404 Not Found",
+        "The page you requested was not found",
+        "The requested URL was not found",
+        "This page does not exist",
+        "The requested page could not be found",
+        "Sorry, we couldn't find that page",
+        "Page doesn't exist",
+    ];
+
+    let user_agent = get_user_agent_prexisting();
+    let Session = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(std::time::Duration::new(5, 0))
+        .user_agent(user_agent)
+        .build()
+        .unwrap_or_else(|err| {
+            warn!(format!("unable to create Client Session\n{}", err));
+            panic!();
+        });
+
+    if !file_exists(&"./payloads/api-endpoints.txt") {
+        warn!("could not if payloads/api-endpoints.txt, quitting....");
+        return None;
+    }
+
+    let mut found_partterns: HashMap<String, String> = HashMap::new();
+    let mut existing_endpoints: Vec<String> = vec![];
+    let api_endpoints: Vec<String> =
+        read_from_file("./payloads/api-endpoints.txt".to_string()).unwrap();
+
+    for endpoint in &api_endpoints {
+        let url = request::urljoin(domain.clone(), endpoint.to_string());
+        match Session.get(url.clone()).send().await {
+            Ok(resp) => {
+                // get status code
+                match resp.status().as_u16() {
+                    403 | 404 => {}
+                    200 => {
+                        existing_endpoints.push(url.clone());
+                    }
+                    _ => {}
+                };
+
+                // get pattern
+                let mut lower_text: String = String::new();
+                match resp.text().await {
+                    Ok(text_data) => {
+                        lower_text = text_data.to_lowercase();
+                        for pattern in &error_patterns {
+                            if lower_text.contains(pattern) {
+                                found_partterns.insert(endpoint.to_string(), pattern.to_string());
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                };
+
+                // // see if title has some sort of 404
+                // let document = scraper::Html::parse_document(&lower_text.clone());
+                // // Define the title selector
+                // let title_selector = scraper::Selector::parse("title").unwrap();
+                //
+                // // Find the title element
+                // if let Some(title_element) = document.select(&title_selector).next() {
+                //     let title_text = title_element.text().collect::<String>().to_lowercase();
+                // }
+            }
+            Err(_) => {
+                warn!(format!("{domain} : failed to fetch endpoint {endpoint}"));
+            }
+        };
+    }
+
+    info_and_handle_data!(format!("{domain} : Found existing endpoints"), String);
+    if !existing_endpoints.is_empty() {
+        for i in &existing_endpoints {
+            println!(" |- {i}");
+            handle_data!(format!(" |- {i}"), String);
+        }
+    } else {
+        info!("No endpoints found");
+    }
+
+    info!(format!("{domain} : Patterns Found"));
+    if !found_partterns.is_empty() {
+        for (k, v) in &found_partterns {
+            println!(" |- Endpoint: {k} - pattern: {v}");
+            handle_data!(format!(" |- Endpoint: {k} - pattern: {v}"), String);
+        }
+    } else {
+        info!("No Patterns found");
+    }
+
+    Some(())
+}
+
+pub mod forbiddenpass {
+    use {
+        crate::{
+            file_util::read_from_file, get_save_file, request::urljoin, save_util,
+            save_util::check_if_save, user_agents::get_user_agent_prexisting,
+        },
+        colored::Colorize,
+        rayon::str::ParallelString,
+        reqwest::{
+            self,
+            header::{HeaderMap, HeaderName, HeaderValue, IntoHeaderName},
+        },
+        std::collections::HashMap,
+    };
+
+    /// creates a headerMap from an array of a Key,vaule pair of a header
+    /// no i will not use hashmap
+    fn create_header_map(additional_headers: [&str; 2]) -> HeaderMap {
+        let (k, v): (String, String) = (
+            additional_headers[0].to_string(),
+            additional_headers[1].to_string(),
+        );
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            get_user_agent_prexisting().parse().unwrap(),
+        );
+        headers.insert(
+            k.parse::<HeaderName>().unwrap(),
+            v.parse::<HeaderValue>().unwrap(),
+        );
+
+        headers
+    }
+
+    /// get a specific set of headers
+    fn get_headers() -> Vec<HeaderMap> {
+        let mut headers_list: Vec<HeaderMap> = Vec::new();
+
+        let header_map_list = vec![
+            create_header_map(["X-Custom-IP-Authorization", "127.0.0.1"].into()),
+            create_header_map(("X-Forwarded-For", "http://127.0.0.1").into()),
+            create_header_map(("X-Forwarded-For", "127.0.0.1:80").into()),
+            create_header_map(("X-Originally-Forwarded-For", "127.0.0.1").into()),
+            create_header_map(("X-Originating-", "http://127.0.0.1").into()),
+            create_header_map(("X-Originating-IP", "127.0.0.1").into()),
+            create_header_map(("True-Client-IP", "127.0.0.1").into()),
+            create_header_map(("X-WAP-Profile", "127.0.0.1").into()),
+            create_header_map(("X-Arbitrary", "http://127.0.0.1").into()),
+            create_header_map(("X-HTTP-DestinationURL", "http://127.0.0.1").into()),
+            create_header_map(("X-Forwarded-Proto", "http://127.0.0.1").into()),
+            create_header_map(("Destination", "127.0.0.1").into()),
+            create_header_map(("X-Remote-IP", "127.0.0.1").into()),
+            create_header_map(("X-Client-IP", "http://127.0.0.1").into()),
+            create_header_map(("X-Host", "http://127.0.0.1").into()),
+            create_header_map(("X-Forwarded-Host", "http://127.0.0.1").into()),
+            create_header_map(("X-Forwarded-Port", "4443").into()),
+            create_header_map(("X-Forwarded-Port", "80").into()),
+            create_header_map(("X-Forwarded-Port", "8080").into()),
+            create_header_map(("X-Forwarded-Port", "8443").into()),
+            create_header_map(("X-ProxyUser-Ip", "127.0.0.1").into()),
+            create_header_map(("Client-IP", "127.0.0.1").into()),
+        ];
+
+        header_map_list
+    }
+    /// i have no idea what it does
+    pub async fn forbiddenpass(domain: String) -> Option<()> {
+        let wordlist = read_from_file("./payloads/bypasses.txt".to_string());
+
+        let Session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            });
+        let url = urljoin(domain.clone(), "".to_string());
+        let mut headers = get_headers();
+        for header in &headers {
+            match Session
+                .get(url.clone())
+                .headers(header.clone())
+                .send()
+                .await
+            {
+                Ok(resp) => match resp.status().as_u16() {
+                    200 => {
+                        info_and_handle_data!(format!("{domain} [200] : {:#?}", header), String);
+                    }
+                    _ => {}
+                },
+                Err(err) => {
+                    if err.is_timeout() {
+                        warn!(format!("{domain}: request Timeout"));
+                    } else {
+                        warn!(format!("{domain}: a request failed"));
+                    }
+                }
+            }
+        }
+        Some(())
+    }
+} // mod forbiddenpass
+
+// run directory bruteforce using reqwest on [domain]
+// using [wordlist] with status code out of scope of [excluded_codes]
+pub fn directory_brute(
+    domain: String,
+    wordlist: Vec<String>,
+    excluded_codes: Vec<i32>,
+) -> Option<()> {
+    let Session = reqwest::blocking::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .timeout(std::time::Duration::new(5, 0))
+        .build()
+        .unwrap_or_else(|err| {
+            warn!(format!("unable to create Client Session\n{}", err));
+            panic!();
+        });
+
+    let mut header: HeaderMap = HeaderMap::new();
+    header.insert(
+        header::USER_AGENT,
+        get_user_agent_prexisting().parse::<HeaderValue>().unwrap(),
+    );
+
+    for word in &wordlist {
+        match Session
+            .get(request::urljoin(domain.clone(), word.clone()))
+            .send()
+        {
+            Ok(resp) => {
+                match resp.status().as_u16() {
+                    200 => {
+                        if !excluded_codes.contains(&200) {
+                            info_and_handle_data!(format!(" {word} [200]"), String);
+                        }
+                    }
+                    302 => {
+                        if !excluded_codes.contains(&302) {
+                            info_and_handle_data!(format!(" {word} [302]"), String);
+                        }
+                    }
+                    301 => {
+                        if !excluded_codes.contains(&301) {
+                            info_and_handle_data!(format!(" {word} [301]"), String);
+                        }
+                    }
+                    _ => {}
+                };
+            }
+            Err(err) => {
+                if err.is_timeout() {
+                    warn!(format!("{word} timedout"));
+                }
+            }
+        };
+    }
+    Some(())
+}
+
+/// Runs directory bruteforce on [domain] using a wordlist file [wordlist_file]
+/// and outputs all status codes out of [excluded_codes]
+/// run in parallel using rayon [completed]
+pub fn run_directory_brute_threads(
+    domains: Vec<&str>,
+    wordlist_file: String,
+    excluded_codes: Vec<i32>,
+) -> () {
+    if !file_exists(&wordlist_file) {
+        err!(format!("{wordlist_file} does not exist"));
+    }
+    let wordlists = read_from_file(wordlist_file).unwrap();
+    domains.par_iter().for_each(|&domain| {
+        {
+            info!(format!("Running Directory bruteforce for {}", domain));
+            //std::thread::sleep(std::time::Duration::from_secs(1));
+            directory_brute(
+                domain.to_string(),
+                wordlists.clone(),
+                excluded_codes.clone(),
+            );
+        }
+    });
+}
+
+/// run local file inclusion on a target or domain [not compeleted? depends on implementation of
+/// the cli]
+pub fn nuclei_lfi() -> Option<()> {
+    let vulnerability: Vec<String> = vec![];
+    let mut input = String::new();
+    println!("Do you want to scan a file or a single target?[f,t,file,target]:");
+    std::io::stdin().read_line(&mut input).unwrap();
+    let mut cmd: String = String::new();
+    match input.to_lowercase().as_str() {
+        "f" | "file" => {
+            let mut filename = String::new();
+            std::io::stdin().read_line(&mut filename).unwrap();
+            info!(format!("scanning {filename}"));
+            cmd = format!("nuclei -l {filename} -tags lfi -c 100");
+        }
+        "t" | "target" => {
+            let mut target = String::new();
+            std::io::stdin().read_line(&mut target).unwrap();
+            info!(format!("scanning {target}"));
+            cmd = format!("nuclei -u {target} -tags lfi -c 100");
+        }
+        _ => {
+            err!("invalid input\nuse: t,target or f,file ");
+        }
+    };
+
+    match run_cmd_string(cmd.clone()) {
+        Some(xmd) => match xmd.stdout {
+            Some(data) => {
+                info_and_handle_data!(format!("{data}"), String);
+            }
+            None => match xmd.stderr {
+                Some(data) => {
+                    warn!(format!("{data}"));
+                    return None;
+                }
+                None => {
+                    warn!("Nuclei: no output");
+                    return None;
+                }
+            },
+        },
+        None => {
+            warn!("running nuclei failed");
+            return None;
+        }
+    };
+
+    Some(())
+}
+
+pub fn google(domain: String) -> Option<()> {
+    //    let search = google_search_rs::search(domain.as_str(), 10, Some("google_results.csv"));
+    // match search {
+    //     Ok(data) => {}
+    //     Err(err) => {}
+    // }
+    Some(())
+}

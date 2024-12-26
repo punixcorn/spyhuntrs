@@ -19,6 +19,7 @@ pub fn set_save_option(value: bool) {
     let mut x = save.lock().unwrap();
     *x = value;
 }
+
 /// returns a string to the save filename
 pub fn get_save_file() -> String {
     let x = save_file.lock().unwrap();
@@ -79,23 +80,35 @@ pub fn save_str(buffer: &str) {
 macro_rules! handle_data {
     ($s:expr, &str) => {
         if check_if_save() {
+            if get_save_file().is_empty() {
+                err!("no save file defined");
+            }
             save_util::save_str($s)
         }
     };
     ($s:expr,String) => {
         if check_if_save() {
+            if save_util::get_save_file().is_empty() {
+                err!("no save file defined");
+            }
             save_util::save_string($s)
         }
     };
 
     ($vec: expr,Vec<&str>) => {
         if check_if_save() {
+            if save_util::get_save_file().is_empty() {
+                err!("no save file defined");
+            }
             save_util::save_vec_strs($vec);
         }
     };
 
     ($vec:expr, Vec<String>) => {
         if check_if_save() {
+            if save_util::get_save_file().is_empty() {
+                err!("no save file defined");
+            }
             save_util::save_vec_strings($vec);
         }
     };
@@ -106,12 +119,18 @@ macro_rules! info_and_handle_data {
     ($s:expr, &str) => {
         info!(format!("{}", $s));
         if check_if_save() {
+            if save_util::get_save_file().is_empty() {
+                err!("no save file defined");
+            }
             save_util::save_str($s)
         }
     };
     ($s:expr,String) => {
         info!($s);
         if check_if_save() {
+            if save_util::get_save_file().is_empty() {
+                err!("no save file defined");
+            }
             save_util::save_string($s)
         }
     };
@@ -121,6 +140,9 @@ macro_rules! info_and_handle_data {
             info!(format!("{i}"));
         }
         if check_if_save() {
+            if save_util::get_save_file().is_empty() {
+                err!("no save file defined");
+            }
             save_util::save_vec_strs($vec);
         }
     };
@@ -130,6 +152,9 @@ macro_rules! info_and_handle_data {
             info!(format!("{i}"));
         }
         if check_if_save() {
+            if save_util::get_save_file().is_empty() {
+                err!("no save file defined");
+            }
             save_util::save_vec_strings($vec);
         }
     };

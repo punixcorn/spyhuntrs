@@ -49,10 +49,16 @@ pub fn run_cmd(mut args: Vec<&str>) -> Option<cmd_info> {
         Ok(output) => {
             cmd_result.output = Some(output.clone());
             if output.status.code().unwrap() == 0 || output.status.success() {
-                cmd_result.stdout = Some(String::from_utf8(output.stdout).unwrap());
+                cmd_result.stdout =
+                    Some(String::from_utf8(output.stdout).unwrap_or_else(|_| String::from("")));
+                cmd_result.stderr =
+                    Some(String::from_utf8(output.stderr).unwrap_or_else(|_| String::from("")));
                 cmd_result.status = Some(0);
             } else {
-                cmd_result.stderr = Some(String::from_utf8(output.stderr).unwrap());
+                cmd_result.stderr =
+                    Some(String::from_utf8(output.stderr).unwrap_or_else(|_| String::from("")));
+                cmd_result.stdout =
+                    Some(String::from_utf8(output.stdout).unwrap_or_else(|_| String::from("")));
                 cmd_result.status = Some(output.status.code().unwrap());
             }
             Some(cmd_result)
