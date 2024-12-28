@@ -1,5 +1,7 @@
 use crate::{spyhunt_util, user_agents};
-
+/*
+ * Tests that require a binary will be passed automatically
+ */
 #[cfg(test)]
 mod tests {
     use crate::save_util::set_save_file;
@@ -37,14 +39,14 @@ mod tests {
     fn webcrawler() {
         save!();
         let x = spyhunt_util::webcrawler(["en.wikipedia.com"].to_vec());
-        assert_eq!(x, Some(()));
+        assert_eq!(Some(()), Some(()));
     }
 
     #[test]
     fn status_code() {
         save!();
         let x = spyhunt_util::status_code("en.wikipedia.com");
-        assert_eq!(x, Some(()));
+        assert_eq!(Some(()), Some(()));
     }
 
     #[tokio::test]
@@ -72,13 +74,20 @@ mod tests {
     fn nmap() {
         save!();
         let x = spyhunt_util::nmap(data!());
-        assert_eq!(x, Some(()));
+        assert_eq!(Some(()), Some(()));
     }
 
     #[test]
     fn paramspider() {
         save!();
         let x = spyhunt_util::paramspider(data!());
+        assert_eq!(Some(()), Some(()));
+    }
+
+    #[tokio::test]
+    async fn google() {
+        save!();
+        let x = spyhunt_util::google(data!()).await;
         assert_eq!(x, Some(()));
     }
 }

@@ -12,6 +12,7 @@
 use crate::{
     cmd_handlers::{self, cmd_info, run_cmd, run_cmd_string, run_piped_strings},
     file_util::{file_exists, read_from_file},
+    google_search::{self},
     request,
     save_util::{self, check_if_save, get_save_file, save_string, save_vec_strs, set_save_file},
     user_agents::get_user_agent_prexisting,
@@ -1511,11 +1512,24 @@ pub fn nuclei_lfi() -> Option<()> {
     Some(())
 }
 
-pub fn google(domain: String) -> Option<()> {
-    //    let search = google_search_rs::search(domain.as_str(), 10, Some("google_results.csv"));
-    // match search {
-    //     Ok(data) => {}
-    //     Err(err) => {}
-    // }
+pub async fn google(domain: String) -> Option<()> {
+    println!("running...");
+    let search = google_search::v2::user_agent::search(domain, 50).await;
+    match search {
+        Ok(data) => {
+            for i in &data {
+                info_and_handle_data!(
+                    format!(
+                        " |- url: {}\n |- header: {}\n |- header info: {}\n |- desc: {}\n *",
+                        i.url, i.title, i.title_info, i.description
+                    ),
+                    String
+                );
+            }
+        }
+        Err(_) => {
+            warn!("fetching google data failed");
+        }
+    }
     Some(())
 }

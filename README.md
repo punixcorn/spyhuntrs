@@ -51,7 +51,7 @@ functions in the file [ WORKING 30/54 ]
 - [x] forbiddenpass
 - [x] directorybrute
 - [x] nuclei lfi
-- [] google
+- [x] google
 - [] cidr notation
 - [] print all ips
 - [] xss scan
