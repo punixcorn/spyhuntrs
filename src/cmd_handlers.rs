@@ -2,10 +2,14 @@
 
 use colored::Colorize;
 use core::str;
+use std::fmt::format;
 use std::os::unix::process::ExitStatusExt;
 use std::process;
 use std::process::*;
 use std::{io::Read, path::PathBuf};
+
+use std::env;
+use std::fs;
 
 use crate::{logging, save};
 
@@ -28,6 +32,18 @@ pub fn run_cmd_string(mut cmd: String) -> Option<cmd_info> {
     }
 }
 
+/// checks if a binary exists by looking through path
+fn is_program_in_path(program: &str) -> bool {
+    if let Ok(path) = env::var("PATH") {
+        for p in path.split(":") {
+            let p_str = format!("{}/{}", p, program);
+            if fs::metadata(p_str).is_ok() {
+                return true;
+            }
+        }
+    }
+    false
+}
 /// takes a vector of strings of the full command and runs it
 /// eg run_cmd([["ls","-al"]].to_vec);
 pub fn run_cmd(mut args: Vec<&str>) -> Option<cmd_info> {
@@ -41,6 +57,14 @@ pub fn run_cmd(mut args: Vec<&str>) -> Option<cmd_info> {
         stdout: None,
         status: None,
     };
+
+    if !is_program_in_path(args[0]) {
+        warn!(format!(
+            "{} is not in path\nInstall or add to Path. quiting...",
+            args[0]
+        ));
+        return None;
+    }
 
     let mut cmd = process::Command::new(args[0]);
     args.remove(0);
@@ -89,7 +113,17 @@ pub fn run_piped(mut cmd1: Vec<&str>, mut cmd2: Vec<&str>) -> Option<cmd_info> {
 
     let cmd1_bin = cmd1[0];
     let cmd2_bin = cmd2[0];
-
+    if !is_program_in_path(cmd1_bin) {
+        warn!(format!(
+            "{cmd1_bin} is not in path\nInstall or add to Path. quiting..."
+        ));
+        return None;
+    } else if !is_program_in_path(cmd2_bin) {
+        warn!(format!(
+            "{cmd2_bin} is not in path\nInstall or add to Path. quiting..."
+        ));
+        return None;
+    }
     cmd1.remove(0);
     cmd2.remove(0);
 

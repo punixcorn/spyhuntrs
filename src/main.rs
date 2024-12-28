@@ -88,21 +88,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
         spyhunt_util::paramspider(domain.clone());
         spyhunt_util::get_reverse_ip(["8.8.8.8"].to_vec());
         spyhunt_util::google(domain.clone()).await;
+        match google_search::v2::user_agent::search("en.wikipedia.com".to_string(), 10).await {
+            Ok(data) => data.into_iter().for_each(|x| {
+                println!("{:#?}", x);
+            }),
+            Err(_) => {}
+        };
+
+        println!("no user agent:");
+        match google_search::v2::no_user_agent::search("en.wikipedia.com".to_string(), 10).await {
+            Ok(data) => data.into_iter().for_each(|x| {
+                println!("{:#?}", x);
+            }),
+            Err(_) => {}
+        };
+        spyhunt_util::cidr_notation::cidr_notation("127.0.0.1");
+        spyhunt_util::print_all_ips("127.0.0.1").unwrap();
     */
-    // match google_search::v2::user_agent::search("en.wikipedia.com".to_string(), 10).await {
-    //     Ok(data) => data.into_iter().for_each(|x| {
-    //         println!("{:#?}", x);
-    //     }),
-    //     Err(_) => {}
-    // };
-    //
-    // println!("no user agent:");
-    // match google_search::v2::no_user_agent::search("en.wikipedia.com".to_string(), 10).await {
-    //     Ok(data) => data.into_iter().for_each(|x| {
-    //         println!("{:#?}", x);
-    //     }),
-    //     Err(_) => {}
-    // };
 
     Ok(())
 }

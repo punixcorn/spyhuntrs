@@ -90,4 +90,11 @@ mod tests {
         let x = spyhunt_util::google(data!()).await;
         assert_eq!(x, Some(()));
     }
+
+    #[test]
+    fn print_all_ips() {
+        save!();
+        let x = spyhunt_util::print_all_ips("192.168.1.0/24");
+        assert_eq!(x, Some(()));
+    }
 }

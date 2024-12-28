@@ -25,6 +25,7 @@ use {
         engine::{self, general_purpose},
         Engine as _,
     },
+    cidr::Ipv4Cidr,
     colored::Colorize,
     dns_lookup::lookup_addr,
     murmur3::murmur3_32,
@@ -328,86 +329,98 @@ pub async fn get_favicon_hash(domain: String) -> Option<()> {
     }
 }
 
-/// checks for cors misconfiguration for a domain [completed]
-/// # Example
-/// ```rust
-/// check_cors_misconfig("www.example.com");
-/// ```
-/// # panic
-/// will panic if its unable to create a client
-pub fn check_cors_misconfig(domain: &str) -> () {
-    let payload = format!("{domain}, evil.com");
-
-    let client = reqwest::blocking::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .timeout(std::time::Duration::new(5, 0))
-        .build()
-        .unwrap_or_else(|err| {
-            warn!(format!("unable to create Client Session\n{}", err));
-            panic!();
-        });
-
-    // Prepare headers
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(reqwest::header::ORIGIN, payload.parse().unwrap());
-
-    // Make the request
-    let mut resp: reqwest::blocking::Response;
-    match client
-        .get(request::urljoin(domain.to_string(), "".to_string()))
-        .headers(headers)
-        .send()
-    {
-        Ok(response) => {
-            resp = response;
-        }
-        _ => {
-            warn!(format!("request to {domain} failed"));
-            return ();
-        }
+pub mod check_cors_misconfig {
+    use {
+        crate::{
+            request,
+            save_util::{self, check_if_save, get_save_file},
+        },
+        colored::Colorize,
+        rayon::prelude::*,
+        reqwest::{self},
+        std::time::Duration,
     };
+    /// checks for cors misconfiguration for a domain [completed]
+    /// # Example
+    /// ```rust
+    /// check_cors_misconfig("www.example.com");
+    /// ```
+    /// # panic
+    /// will panic if its unable to create a client
+    pub fn check_cors_misconfig(domain: &str) -> () {
+        let payload = format!("{domain}, evil.com");
 
-    //println!("{:#?}", resp);
+        let client = reqwest::blocking::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            });
 
-    let (mut allow_origin, mut allow_method): (bool, bool) = (false, false);
-    match resp.headers().get("Access-Control-Allow-Origin") {
-        Some(value) => {
-            if value.to_str().unwrap_or_else(|_| "") == "evil.com" {
-                allow_origin = false;
-            }
-        }
-        None => (),
-    };
+        // Prepare headers
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::ORIGIN, payload.parse().unwrap());
 
-    match resp.headers().get("Access-Control-Allow-Credentials") {
-        Some(value) => {
-            if value.to_str().unwrap_or_else(|_| "") == "true" {
-                allow_origin = false;
-            }
-        }
-        None => (),
-    };
-    let mut vuln_status: String;
-    if allow_origin && allow_method {
-        vuln_status = "VULNERABLE".to_string();
-    } else {
-        vuln_status = "NOT VULNERABLE".to_string();
-    }
-    info!(format!("{vuln_status}: {domain}"));
-    handle_data!(format!("{vuln_status} : {domain}"), String);
-}
-
-/// checks for cors misconfiguration in parallel using rayon [completed]
-pub async fn run_cors_misconfig_threads(domains: Vec<&str>) -> () {
-    domains.par_iter().for_each(|&domain| {
+        // Make the request
+        let mut resp: reqwest::blocking::Response;
+        match client
+            .get(request::urljoin(domain.to_string(), "".to_string()))
+            .headers(headers)
+            .send()
         {
-            info!(format!("Checking CORS for {}", domain));
-            //std::thread::sleep(std::time::Duration::from_secs(1));
-            check_cors_misconfig(domain);
-            info!(format!("Checked: {}", domain));
+            Ok(response) => {
+                resp = response;
+            }
+            _ => {
+                warn!(format!("request to {domain} failed"));
+                return ();
+            }
+        };
+
+        //println!("{:#?}", resp);
+
+        let (mut allow_origin, mut allow_method): (bool, bool) = (false, false);
+        match resp.headers().get("Access-Control-Allow-Origin") {
+            Some(value) => {
+                if value.to_str().unwrap_or_else(|_| "") == "evil.com" {
+                    allow_origin = false;
+                }
+            }
+            None => (),
+        };
+
+        match resp.headers().get("Access-Control-Allow-Credentials") {
+            Some(value) => {
+                if value.to_str().unwrap_or_else(|_| "") == "true" {
+                    allow_origin = false;
+                }
+            }
+            None => (),
+        };
+        let mut vuln_status: String;
+        if allow_origin && allow_method {
+            vuln_status = "VULNERABLE".to_string();
+        } else {
+            vuln_status = "NOT VULNERABLE".to_string();
         }
-    });
+        info!(format!("{vuln_status}: {domain}"));
+        handle_data!(format!("{vuln_status} : {domain}"), String);
+    }
+
+    /// checks for cors misconfiguration in parallel using rayon [completed]
+    pub async fn run_cors_misconfig_threads(domains: Vec<&str>) -> () {
+        domains.par_iter().for_each(|&domain| {
+            {
+                info!(format!("Checking CORS for {}", domain));
+                //std::thread::sleep(std::time::Duration::from_secs(1));
+                check_cors_misconfig(domain);
+                info!(format!("Checked: {}", domain));
+            }
+        });
+    }
 }
 
 /// you can either pass in a [proxy] or a [proxy file name] as the [proxy]
@@ -1530,6 +1543,76 @@ pub async fn google(domain: String) -> Option<()> {
         Err(_) => {
             warn!("fetching google data failed");
         }
+    }
+    Some(())
+}
+pub mod cidr_notation {
+    use {
+        crate::save_util::{self, check_if_save},
+        cidr::Ipv4Cidr,
+        colored::Colorize,
+        rayon::prelude::*,
+        std::{
+            fmt::format,
+            net::{SocketAddr, TcpStream},
+            str::FromStr,
+            time::Duration,
+            u16,
+        },
+    };
+
+    pub fn scan_all_ports(ip: String) -> Vec<u16> {
+        info!(format!("Scanning {ip}"));
+        let ports: Vec<u16> = (1..=65535).collect();
+        ports
+            .par_iter()
+            .filter_map(|&port| {
+                let address = format!("{}:{}", ip, port);
+                let socket_addr: SocketAddr = address.parse().ok()?;
+                match TcpStream::connect_timeout(&socket_addr, Duration::from_secs(1)) {
+                    Ok(_) => {
+                        println!(" |-[{port}] OPEN");
+                        Some(port)
+                    }
+                    Err(_) => None,
+                }
+            })
+            .collect::<Vec<u16>>()
+    }
+
+    pub fn cidr_notation(ip: &str) {
+        let network = Ipv4Cidr::from_str(ip).unwrap();
+        let ips: Vec<_> = network.iter().map(|ip| ip.to_string()).collect::<Vec<_>>();
+
+        let open_ports: Vec<(String, Vec<u16>)> = ips
+            .into_par_iter()
+            .filter_map(|ip| {
+                let _open_ports = scan_all_ports(ip.clone());
+                Some((ip.clone(), _open_ports))
+            })
+            .filter(|_open_ports| !_open_ports.1.is_empty())
+            .collect();
+
+        if open_ports.is_empty() {
+            warn!("no open ports found");
+        } else {
+            for found in &open_ports {
+                handle_data!(format!("{}", found.0), String);
+                for __port in &found.1 {
+                    handle_data!(format!(" |-{}", __port), String);
+                }
+            }
+        }
+    }
+}
+
+pub fn print_all_ips(ip: &str) -> Option<()> {
+    let network = Ipv4Cidr::from_str(ip).unwrap();
+    let ips: Vec<_> = network.iter().map(|ip| ip.to_string()).collect::<Vec<_>>();
+    info_and_handle_data!(format!("{ip} Extracted IP's"), String);
+    for _ip in &ips {
+        println!(" |-{_ip}");
+        handle_data!(format!(" |-{ip}"), String);
     }
     Some(())
 }

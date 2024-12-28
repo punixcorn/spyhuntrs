@@ -52,8 +52,8 @@ functions in the file [ WORKING 30/54 ]
 - [x] directorybrute
 - [x] nuclei lfi
 - [x] google
-- [] cidr notation
-- [] print all ips
+- [x] cidr notation
+- [x] print all ips
 - [] xss scan
 - [] sqli scan
 - [] webserver scan
