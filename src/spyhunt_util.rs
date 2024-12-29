@@ -9,12 +9,21 @@
 #![allow(unused_macros)]
 #![allow(unreachable_code)]
 
+/* [FOR TESTING]
+ * All functions must return a Option<()>.
+ * No need to return data, redundant.
+ *
+ * [INFO]
+ * Some functions take in Vec<T> where T = &str | String.
+ * Most just take in a String | &str
+ * I should fix that to be more uniform?
+ */
+
 use crate::{
     cmd_handlers::{self, cmd_info, run_cmd, run_cmd_string, run_piped_strings},
     file_util::{file_exists, read_from_file},
     google_search::{self},
-    request,
-    save_util::{self, check_if_save, get_save_file, save_string, save_vec_strs, set_save_file},
+    request, save_util,
     user_agents::get_user_agent_prexisting,
 };
 
@@ -273,9 +282,43 @@ pub async fn status_code_reqwest(domain: &str) -> Option<()> {
 }
 
 /// enumate domain for server info and ip [completed]
-pub async fn enumerate_domain(domain: &str) -> Option<String> {
+pub async fn enumerate_domain(domain: &str) -> Option<()> {
     let mut server: &str = "unknown";
     let resp = fetch_url_unwrap!(domain.to_string());
+    let mut domain_ip: String = String::new();
+
+    match dns_lookup::lookup_host(domain) {
+        Ok(ips) => {
+            match Some(ips) {
+                Some(ip) => {
+                    match ip.get(0) {
+                        Some(v4) => {
+                            // let ip_v4 = v4.to_string();
+                            // info!(format!("{d} : [{ip_v4}]"));
+                            // handle_data!(ip_v4, String);
+                            domain_ip = v4.to_string();
+                        }
+                        _ => {
+                            warn!(format!(
+                                "could not parse data gotten from lookup for {}",
+                                domain
+                            ));
+                            return None;
+                        }
+                    };
+                }
+                _ => {
+                    warn!(format!("no ip gotten for {}", domain));
+                }
+            };
+        }
+        _ => (),
+    };
+
+    if domain_ip.is_empty() {
+        domain_ip = "Could not resolve ip".to_string();
+    }
+
     if resp.status().is_success()
         || resp.status().is_redirection()
         || resp.status().is_informational()
@@ -291,10 +334,10 @@ pub async fn enumerate_domain(domain: &str) -> Option<String> {
             }
         }
 
-        let data = format!("{d} : [{}]", server);
+        let data = format!("{d} [{domain_ip}] : [{server}]");
         info!(data);
         handle_data!(data, String);
-        return Some(d.to_string());
+        return Some(());
     }
 
     return None;
@@ -331,10 +374,7 @@ pub async fn get_favicon_hash(domain: String) -> Option<()> {
 
 pub mod check_cors_misconfig {
     use {
-        crate::{
-            request,
-            save_util::{self, check_if_save, get_save_file},
-        },
+        crate::{request, save_util},
         colored::Colorize,
         rayon::prelude::*,
         reqwest::{self},
@@ -922,7 +962,7 @@ pub fn brokenlinks(domain: String) {
 
 pub mod tech {
     use crate::request;
-    use crate::save_util::{self, check_if_save};
+    use crate::save_util;
     use reqwest::Error;
     use serde::{Deserialize, Serialize};
 
@@ -1027,6 +1067,14 @@ pub fn ip_addresses(domain: Vec<String>) -> Option<()> {
         };
     }
     Some(())
+}
+
+/// This does exactly what `enumerate_domain(...)` does.
+/// It literally just finds a title in the html
+/// And Appends it, which would be better off just doing
+/// That in `enumerate_domain(...)`
+pub async fn domain_info(domain: &str) -> Option<()> {
+    return enumerate_domain(domain).await;
 }
 
 /// checks for important subdomains in a file or subdomains [completed]
@@ -1287,7 +1335,7 @@ pub mod forbiddenpass {
     use {
         crate::{
             file_util::read_from_file, get_save_file, request::urljoin, save_util,
-            save_util::check_if_save, user_agents::get_user_agent_prexisting,
+            user_agents::get_user_agent_prexisting,
         },
         colored::Colorize,
         rayon::str::ParallelString,
@@ -1548,7 +1596,7 @@ pub async fn google(domain: String) -> Option<()> {
 }
 pub mod cidr_notation {
     use {
-        crate::save_util::{self, check_if_save},
+        crate::save_util,
         cidr::Ipv4Cidr,
         colored::Colorize,
         rayon::prelude::*,
@@ -1615,4 +1663,694 @@ pub fn print_all_ips(ip: &str) -> Option<()> {
         handle_data!(format!(" |-{ip}"), String);
     }
     Some(())
+}
+
+pub mod xss_scan {
+    use crate::{file_util, request, save_util, spyhunt_util};
+    use colored::Colorize;
+    use core::fmt;
+    use std::{collections::VecDeque, fmt::write, usize};
+
+    use {
+        htmlescape::encode_minimal,
+        rand::{self, distributions::Alphanumeric, Rng},
+        rayon::iter::{IntoParallelRefIterator, ParallelIterator},
+        reqwest::{self, Client},
+        std::{collections::HashMap, env::vars, fmt::format},
+        tokio::{self},
+        urlencoding::{self},
+    };
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum Likelihood {
+        Low,
+        High,
+    }
+    use reqwest::header::RETRY_AFTER;
+    use Likelihood::{High, Low};
+
+    #[derive(Debug, Clone)]
+    pub struct Vuln {
+        pub url: String,
+        pub parameter: String,
+        pub payload: String,
+        pub test_url: String,
+        execution_likelihood: Likelihood,
+    }
+
+    impl fmt::Display for Likelihood {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let likelihood_str = match self {
+                Likelihood::High => "High",
+                Likelihood::Low => "Low",
+            };
+            write!(f, "{}", likelihood_str)
+        }
+    }
+
+    impl Vuln {
+        pub fn new() -> Self {
+            Self {
+                url: String::new(),
+                parameter: String::new(),
+                payload: String::new(),
+                test_url: String::new(),
+                execution_likelihood: Low,
+            }
+        }
+    }
+
+    impl fmt::Display for Vuln {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+             "  +URL: {}\n  +Parameter: {}\n  +Payload: {}\n  +Test URL: {}\n  +Execution Likelihood: {}\n",
+                self.url, self.parameter, self.payload, self.test_url, self.execution_likelihood
+            )
+        }
+    }
+
+    /// Will scan for xxs using param injection
+    /// on `domain`
+    /// returns a Vec of successful injections `struct Vuln`
+    /// which is checked by looking into the response text
+    pub async fn xss_scan_url(domain: String, payloads: Vec<String>) -> Vec<Vuln> {
+        println!("Scanning {domain}...");
+        let calls = 1;
+
+        let Session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                eprintln!("unable to create Client Session\n{}", err);
+                panic!();
+            });
+
+        //handle domain fix here
+        let mut url =
+            reqwest::Url::parse(request::urljoin(domain.clone(), "".to_string()).as_str()).unwrap();
+        let params: HashMap<_, _> = url.query_pairs().into_owned().collect();
+        let mut vulnerabilities: Vec<Vuln> = vec![];
+
+        for (param, val) in params.iter() {
+            for payload in &payloads {
+                let mut _vuln = Vuln::new();
+                let random_string = generate_random_string(8);
+                let test_payload = payload.replace("XSS", &random_string);
+                let encoded_payload = encode_pay_load(test_payload.clone());
+
+                // *val = encoded_payload;
+
+                //fix req
+                url.set_query(Some(
+                    &params
+                        .iter()
+                        .map(|(key, value)| {
+                            if value == val {
+                                format!("{}={}", key, encoded_payload)
+                            } else {
+                                format!("{}={}", key, value)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("&")
+                        .as_str(),
+                ));
+
+                // make req
+                let res = Session.get(url.clone()).send().await;
+                match res {
+                    Ok(resp) => {
+                        let mut _vuln: Vuln = Vuln::new();
+                        match resp.text().await {
+                            Ok(text) => {
+                                if text.to_lowercase().contains(&random_string.to_lowercase()) {
+                                    _vuln = Vuln {
+                                        payload: encoded_payload.clone(),
+                                        parameter: param.clone(),
+                                        test_url: url.to_string().clone(),
+                                        url: domain.clone(),
+                                        execution_likelihood: Low,
+                                    };
+                                    println!(" |-{domain} : text found in response");
+                                }
+
+                                let pattern_script = regex::Regex::new(&format!(
+                                    r#"<script>.*?alert\(['"]{}['"]\).*?</script>"#,
+                                    regex::escape(&random_string)
+                                ))
+                                .unwrap();
+                                let pattern_event = regex::Regex::new(&format!(
+                                    r#"on\w+\s*=.*?alert\(['"]{}['"]\)"#,
+                                    regex::escape(&random_string)
+                                ))
+                                .unwrap();
+
+                                if pattern_script.is_match(&text) || pattern_event.is_match(&text) {
+                                    println!(" |-{domain} : Probable vulnerability found");
+                                    _vuln.execution_likelihood = High;
+                                }
+                                vulnerabilities.push(_vuln);
+                            }
+                            Err(_) => {
+                                warn!("failed to get data");
+                            }
+                        };
+                    }
+                    Err(err) => {
+                        if err.is_timeout() {
+                            warn!(format!("fetching {} timedout.", domain));
+                        }
+                    }
+                }; // end of req
+            } // for
+        } // for
+        vulnerabilities
+    }
+
+    /// This is so rayon can handle async
+    pub fn xss_scan_url_async_wrapper(domain: String, payloads: Vec<String>) -> Vec<Vuln> {
+        let _runtime = tokio::runtime::Runtime::new().unwrap();
+        _runtime.block_on(xss_scan_url(domain, payloads))
+    }
+
+    /// this takes in a  Vec of target because its multithreaded
+    pub fn xxs_scanner(targets: Vec<String>) -> Option<()> {
+        // read file
+        let payloads: Vec<String> = file_util::read_from_file("./payloads/xss.txt".to_string())
+            .unwrap_or_else(|_| {
+                warn!("Could not read from file payloads/xss.txt,exiting");
+                [].to_vec()
+            });
+        if payloads.len() == 0 {
+            return None;
+        }
+
+        info!("This might take a while please wait...");
+        let __Vulns: Vec<(String, Vec<Vuln>)> = targets
+            .par_iter()
+            .filter_map(|_target| {
+                let list = xss_scan_url_async_wrapper(_target.clone(), payloads.clone());
+                Some((_target.clone(), list))
+            })
+            .collect::<Vec<(String, Vec<Vuln>)>>();
+
+        if __Vulns.is_empty() {
+            warn!("Could not find any payload injection");
+            return Some(());
+        }
+
+        for ___vuln in &__Vulns {
+            info!(format!("{}", ___vuln.0));
+            for ____vulns in &___vuln.1 {
+                handle_data!(format!("{}", ____vulns), String);
+                println!("{}", ____vulns);
+            }
+        }
+        Some(())
+    }
+
+    pub fn modify_url_test(url: &str) {
+        let mut url = reqwest::Url::parse(url).expect("Invalid URL");
+
+        let mut params: HashMap<String, String> = url.query_pairs().into_owned().collect();
+
+        for (key, value) in params.iter_mut() {
+            if value == "foo" {
+                *value = "not_foo".to_string();
+            }
+        }
+
+        url.set_query(Some(
+            &params
+                .iter()
+                .map(|(key, value)| format!("{}={}", key, value))
+                .collect::<Vec<_>>()
+                .join("&"),
+        ));
+
+        println!("Modified URL: {}", url);
+    }
+
+    /// Generate a random String of `length`
+    pub fn generate_random_string(length: usize) -> String {
+        rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(length)
+            .map(char::from)
+            .collect()
+    }
+    #[derive(Clone, Debug)]
+    #[repr(usize)]
+    pub enum Encode_pay_load_type {
+        no_encoding = 0,
+        url_encoding = 1,
+        html_encoding = 2,
+        full_url_encoding = 3,
+        hex_encoding = 4,
+        unicode_encoding = 5,
+    }
+
+    /// Encode a `payload` in a random encoding
+    /// # Encodings
+    /// - url encoding
+    /// - html encoding
+    /// - hex encoding
+    /// - unicode
+    /// - no encoding
+    pub fn encode_pay_load(payload: String) -> String {
+        return encode_pay_load_type(payload, None);
+    }
+
+    /// Encode a `payload` in a specific encoding
+    /// # Encodings
+    /// The enum `Encode_pay_load_type` holds the types
+    /// - url encoding
+    /// - html encoding
+    /// - hex encoding
+    /// - unicode
+    /// - no encoding
+    pub fn encode_pay_load_type(
+        payload: String,
+        encoding_type: Option<Encode_pay_load_type>,
+    ) -> String {
+        let encodings: Vec<fn(String) -> String> = vec![
+            |s: String| {
+                return s; // no encoding
+            },
+            |s: String| {
+                return urlencoding::encode(s.as_str()).into_owned(); // url
+            },
+            |s: String| return htmlescape::encode_minimal(s.as_str()).to_string(), // html
+            |s: String| {
+                s.chars()
+                    .map(|_char| return format!("%{:02x}", _char as u32))
+                    .collect() // url encode
+            },
+            |s: String| {
+                s.chars()
+                    .map(|_char| return format!("&#x{:x}", _char as u32)) //hex
+                    .collect()
+            },
+            |s: String| {
+                s.chars()
+                    .map(|_char| return format!("\\u{:04x}", _char as u32)) // unicode
+                    .collect()
+            },
+        ];
+        match encoding_type {
+            Some(enc) => encodings[enc as usize](payload),
+            None => {
+                let random_number = rand::thread_rng().gen_range(0..encodings.len());
+                encodings[random_number](payload)
+            }
+        }
+    }
+}
+
+pub mod sqli_scan {
+
+    use {
+        crate::{
+            check_if_save, file_util::read_from_file, request, save_util, spyhunt_util::xss_scan,
+            user_agents::get_user_agent_prexisting,
+        },
+        colored::Colorize,
+        rand::Rng,
+        rayon::iter::{IntoParallelRefIterator, ParallelIterator},
+        reqwest,
+        std::{collections::HashMap, fmt},
+    };
+
+    #[derive(Debug, Clone)]
+    pub struct Vuln {
+        pub url: String,
+        pub parameter: String,
+        pub payload: String,
+        pub test_url: String,
+    }
+
+    impl Vuln {
+        pub fn new() -> Self {
+            Self {
+                url: String::new(),
+                parameter: String::new(),
+                payload: String::new(),
+                test_url: String::new(),
+            }
+        }
+    }
+
+    impl fmt::Display for Vuln {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "  +URL: {}\n  +Parameter: {}\n  +Payload: {}\n  +Test URL: {}\n",
+                self.url, self.parameter, self.payload, self.test_url,
+            )
+        }
+    }
+
+    pub fn encode_payload(payload: String) -> String {
+        let __encode_pay_load_type = [
+            xss_scan::Encode_pay_load_type::no_encoding,
+            xss_scan::Encode_pay_load_type::url_encoding,
+            xss_scan::Encode_pay_load_type::full_url_encoding,
+        ];
+
+        let random_num = rand::thread_rng().gen_range(0..__encode_pay_load_type.len());
+        return xss_scan::encode_pay_load_type(
+            payload,
+            Some(__encode_pay_load_type[random_num].clone()),
+        );
+    }
+
+    /// Will scan for sqli using param injection
+    /// on `target`
+    /// returns a Vec of successful injections `struct sqli_scan::Vuln`
+    /// which is checked by looking into the response text  for errors
+    pub async fn sqli_scan_url(target: String, error_payloads: Vec<String>) -> Vec<Vuln> {
+        let sql_errors = [
+            r"SQL syntax.*MySQL",
+            r"Warning.*mysql_.*",
+            r"valid MySQL result",
+            r"MySqlClient\.",
+            r"PostgreSQL.*ERROR",
+            r"Warning.*\Wpg_.*",
+            r"valid PostgreSQL result",
+            r"Npgsql\.",
+            r"Driver.*SQL SERVER",
+            r"OLE DB.*SQL SERVER",
+            r"SQL Server.*Driver",
+            r"Warning.*mssql_.*",
+            r"Microsoft SQL Native Client error '[0-9a-fA-F]{8}",
+            r"ODBC SQL Server Driver",
+            r"SQLServer JDBC Driver",
+            r"Oracle error",
+            r"Oracle.*Driver",
+            r"Warning.*\Woci_.*",
+            r"Warning.*\Wora_.*",
+        ];
+
+        let session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            });
+
+        //handle domain fix here
+        let mut url =
+            reqwest::Url::parse(request::urljoin(target.clone(), "".to_string()).as_str()).unwrap();
+        let params: HashMap<_, _> = url.query_pairs().into_owned().collect();
+        let mut vulnerabilities: Vec<Vuln> = vec![];
+
+        for (param, val) in params.iter() {
+            for payload in &error_payloads {
+                let encoded_payload = encode_payload(payload.to_string());
+
+                //fix req
+                url.set_query(Some(
+                    &params
+                        .iter()
+                        .map(|(key, value)| {
+                            if value == val {
+                                format!("{}={}", key, encoded_payload)
+                            } else {
+                                format!("{}={}", key, value)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("&")
+                        .as_str(),
+                ));
+                let res = session
+                    .get(url.clone())
+                    .header(
+                        reqwest::header::USER_AGENT,
+                        get_user_agent_prexisting()
+                            .parse::<reqwest::header::HeaderValue>()
+                            .unwrap(),
+                    )
+                    .send()
+                    .await;
+                match res {
+                    Ok(resp) => {
+                        match resp.text().await {
+                            Ok(text) => {
+                                for error in sql_errors {
+                                    let regex =
+                                        regex::Regex::new(error).expect("Invalid regex pattern");
+                                    if regex.is_match(&text) {
+                                        println!(
+                                            " |-{target} :Found SQL error matching pattern: {}",
+                                            text
+                                        );
+                                        vulnerabilities.push(Vuln {
+                                            payload: encoded_payload.clone(),
+                                            parameter: param.clone(),
+                                            test_url: url.to_string().clone(),
+                                            url: target.clone(),
+                                        });
+
+                                        break; // Stop after finding the first match
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                warn!("failed to get data");
+                            }
+                        };
+                    }
+                    Err(err) => {
+                        if err.is_timeout() {
+                            warn!(format!("fetching {} timedout.", target));
+                        }
+                    }
+                }; // end of req
+            }
+        }
+        vulnerabilities
+    }
+
+    /// function for rayon to handle multithreading
+    pub fn sqli_scan_url_async_wrapper(domain: String, payloads: Vec<String>) -> Vec<Vuln> {
+        let _runtime = tokio::runtime::Runtime::new().unwrap();
+        _runtime.block_on(sqli_scan_url(domain, payloads))
+    }
+
+    /// this takes in a Vec targets
+    /// because of multithreading
+    /// will run the `sqli_scan::sqli_scan_url(...)`
+    /// on each target.
+    pub fn sqli_scanner(target: Vec<String>) -> Option<()> {
+        // he opens payloads file but does nothing to it
+        // whyyyyyyyyyyy the hell????
+        // open payloads/sqli.txt
+        let mut payloads: Vec<String> =
+            read_from_file("./payloads/sqli.txt".to_string()).unwrap_or([].to_vec());
+
+        if payloads.is_empty() {
+            payloads = [
+                "' OR '1'='1",
+                "' OR '1'='1' --",
+                "' UNION SELECT NULL, NULL, NULL --",
+                "1' ORDER BY 1--+",
+                "1' ORDER BY 2--+",
+                "1' ORDER BY 3--+",
+                "1 UNION SELECT NULL, NULL, NULL --",
+            ]
+            .to_vec()
+            .iter()
+            .map(|&s| s.to_string())
+            .collect();
+        }
+
+        let _vulnerabilities: Vec<(String, Vec<Vuln>)> = target
+            .par_iter()
+            .filter_map(|_target| {
+                let _vulns = sqli_scan_url_async_wrapper(_target.clone(), payloads.clone());
+                Some((_target.clone(), _vulns))
+            })
+            .collect::<Vec<(String, Vec<Vuln>)>>();
+
+        if _vulnerabilities.is_empty() {
+            warn!("Could not find any payload injection");
+            return Some(());
+        }
+
+        for ___vuln in &_vulnerabilities {
+            info!(format!("{}", ___vuln.0));
+            for ____vulns in &___vuln.1 {
+                handle_data!(format!("{}", ____vulns), String);
+                println!("{}", ____vulns);
+            }
+        }
+        Some(())
+    }
+}
+
+mod webserver_scan {
+    use colored::Colorize;
+    use std::time::Duration;
+    use std::{collections::HashMap, u16};
+
+    use reqwest::{self, header::HeaderMap};
+
+    pub async fn get_server_info(url: String, path: String) -> Option<(HeaderMap, u16, String)> {
+        let session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(std::time::Duration::new(10, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create client session\n{}", err));
+                panic!();
+            });
+
+        // reqwest::urljoin(...)
+        let resp = session.get(url.clone()).send().await;
+        match resp {
+            Ok(res) => {
+                let status_code = res.status().as_u16();
+                let headers = res.headers().clone();
+                let text = match res.text().await {
+                    Ok(text_data) => text_data,
+                    Err(_) => "".to_string(),
+                };
+
+                return Some((headers, status_code, text));
+            }
+            Err(err) => {
+                if err.is_timeout() {
+                    warn!(format!("{url} timed out"));
+                }
+                return None;
+            }
+        }
+    }
+
+    pub fn analyze_headers(headers: HeaderMap) -> HashMap<String, String> {
+        let mut server_info: HashMap<String, String> = HashMap::new();
+
+        for (header, value) in &headers {
+            if header.to_string().to_lowercase() == "server" {
+                server_info.insert(
+                    "Server".to_string(),
+                    value.to_str().unwrap_or("").to_string(),
+                );
+            } else if header.to_string().to_lowercase() == "x-powered-by" {
+                server_info.insert(
+                    "X-Powered-By".to_string(),
+                    value.to_str().unwrap_or("").to_string(),
+                );
+            } else if header.to_string().to_lowercase() == "x-aspnet-version" {
+                server_info.insert(
+                    "ASP.NET".to_string(),
+                    value.to_str().unwrap_or("").to_string(),
+                );
+            } else if header.to_string().to_lowercase() == "x-generator" {
+                server_info.insert(
+                    "Generator".to_string(),
+                    value.to_str().unwrap_or("").to_string(),
+                );
+            }
+        }
+        return server_info;
+    }
+
+    pub async fn check_specific_files(url: String) -> HashMap<String, String> {
+        let mut files_to_check: HashMap<&str, HashMap<&str, &str>> = HashMap::new();
+
+        files_to_check.insert(
+            "/favicon.ico",
+            HashMap::from([("Apache", "Apache"), ("Nginx", "Nginx")]),
+        );
+
+        files_to_check.insert(
+            "/server-status",
+            HashMap::from([("Apache", "Apache Status")]),
+        );
+        files_to_check.insert("/nginx_status", HashMap::from([("Nginx", "Nginx Status")]));
+        files_to_check.insert("/web.config", HashMap::from([("IIS", "IIS Config")]));
+        files_to_check.insert("/phpinfo.php", HashMap::from([("PHP", "PHP Version")]));
+
+        let mut results: HashMap<String, String> = HashMap::new();
+
+        for (file, signatures) in &files_to_check {
+            let (_headers, status, content) = get_server_info(url.clone(), file.to_string())
+                .await
+                .unwrap();
+
+            if status == 200 {
+                for (server, signature) in signatures {
+                    if content.contains(signature) {
+                        results.insert(server.to_string(), format!("Detected via {file}"));
+                    }
+                }
+            }
+        }
+        return results;
+    }
+
+    /// entry point in webserver_scan
+    pub async fn detect_web_server(url: String) -> Option<()> {
+        //url fix
+        println!("Scanning {url}");
+        let mut success: bool = true;
+        let (headers, status, _content) = get_server_info(url.clone(), "".to_string())
+            .await
+            .unwrap_or_else(|| {
+                success = false;
+                (HeaderMap::new(), u16::max_value(), "".to_string())
+            });
+
+        if !success && status == u16::max_value() {
+            warn!("Error Unable to connect to server");
+            return None;
+        }
+
+        let server_info: HashMap<String, String> = analyze_headers(headers.clone());
+        let mut return_info: HashMap<String, String> = HashMap::new();
+
+        if !server_info.contains_key("Server") {
+            if headers.contains_key(reqwest::header::SET_COOKIE) {
+                match headers.get(reqwest::header::SET_COOKIE) {
+                    Some(some) => {
+                        if some.to_str().unwrap_or("").contains("ASPSESSIONID") {
+                            return_info.insert("Likely".to_string(), "IIS".to_string());
+                        } else if some.to_str().unwrap_or("").contains("PHPSESSID") {
+                            return_info.insert("Likely".to_string(), "PHP".to_string());
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+
+        check_specific_files(url).await.into_iter().for_each(|map| {
+            return_info.insert(map.0, map.1);
+        });
+
+        if !return_info.is_empty() {
+            for (key, value) in return_info {
+                println!("{key}:{value}");
+            }
+        } else {
+            warn!("Unable to determine web server");
+        }
+
+        if headers.contains_key("CF-RAY") {
+            println!("Cloudflare detected");
+        }
+        if headers.contains_key("X-Varnish") {
+            println!("Varnish Cache detected");
+        }
+
+        Some(())
+    }
 }

@@ -1,14 +1,18 @@
+![img](./spyhunt_logo_cropped.png)
+
 # Spyhuntrs
 
 Everything in **spyhunt** but with a better save feature and written (poorly) in rust!
 
 # Important stuff to do
 
-- [x] Tests [no Compeleted]
+- [x] Tests [not Compeleted]
 - [] better error handling (for requests)
 - [] Documentation
 - [] rename files
 - [] better error handling for tests capture
+- [x] Make Readme Image
+- [] Install Script (thinking about just using his .py script and running it)
 
 # Spyhunt.py Porting List
 
@@ -16,7 +20,7 @@ Everything in **spyhunt** but with a better save feature and written (poorly) in
 
 # Main file
 
-functions in the file [ WORKING 30/54 ]
+functions in the file [ WORKING 38/52 ]
 
 - [x] ~~update~~ won't do it
 - [x] save/s
@@ -54,9 +58,9 @@ functions in the file [ WORKING 30/54 ]
 - [x] google
 - [x] cidr notation
 - [x] print all ips
-- [] xss scan
-- [] sqli scan
-- [] webserver scan
+- [x] xss scan
+- [x] sqli scan
+- [x] webserver scan
 - [] javascript scan
 - [] javascript enpoints
 - [] param miner

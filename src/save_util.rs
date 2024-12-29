@@ -79,7 +79,7 @@ pub fn save_str(buffer: &str) {
 #[macro_export]
 macro_rules! handle_data {
     ($s:expr, &str) => {
-        if check_if_save() {
+        if save_util::check_if_save() {
             if get_save_file().is_empty() {
                 err!("no save file defined");
             }
@@ -87,7 +87,7 @@ macro_rules! handle_data {
         }
     };
     ($s:expr,String) => {
-        if check_if_save() {
+        if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
@@ -96,7 +96,7 @@ macro_rules! handle_data {
     };
 
     ($vec: expr,Vec<&str>) => {
-        if check_if_save() {
+        if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
@@ -105,7 +105,7 @@ macro_rules! handle_data {
     };
 
     ($vec:expr, Vec<String>) => {
-        if check_if_save() {
+        if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
@@ -118,7 +118,7 @@ macro_rules! handle_data {
 macro_rules! info_and_handle_data {
     ($s:expr, &str) => {
         info!(format!("{}", $s));
-        if check_if_save() {
+        if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
@@ -127,7 +127,7 @@ macro_rules! info_and_handle_data {
     };
     ($s:expr,String) => {
         info!($s);
-        if check_if_save() {
+        if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
@@ -139,7 +139,7 @@ macro_rules! info_and_handle_data {
         for i in $vec {
             info!(format!("{i}"));
         }
-        if check_if_save() {
+        if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
@@ -151,7 +151,7 @@ macro_rules! info_and_handle_data {
         for i in $vec {
             info!(format!("{i}"));
         }
-        if check_if_save() {
+        if save_util::save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }

@@ -1,5 +1,6 @@
 #![macro_use]
 use crate::user_agents::{self, get_user_agent};
+use colored::Colorize;
 use reqwest::{header, Response};
 use std::error::Error;
 use std::path::Path;
@@ -26,13 +27,32 @@ pub async fn fetch(url: String, mut user_agent: String) -> Result<Response, Stri
 /// joins a domain and path eg www.domain.com/ + /api/v1  -> www.domain.com/api/v1
 /// domain.com/?foo= + /api/vi = domain.com/?foo=/ap/vi
 pub fn urljoin(mut url: String, path: String) -> String {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
-        url.insert_str(0, "https://");
+    let parse_url = reqwest::Url::parse(&url);
+
+    // this checks for all scheme, instead of eariler just https/http
+    // i could split it by the ://
+    // but i would need a map of all scheme to check
+    // and i hope reqwest has a map it checks by
+    match parse_url {
+        Ok(_url) => {
+            if !_url.scheme().is_empty() {
+                url.insert_str(0, "https://");
+            }
+        }
+        Err(_) => {}
     }
+
+    // if !url.starts_with("https://") && !url.starts_with("http://") {
+    //     url.insert_str(0, "https://");
+    // }
 
     if path.is_empty() {
         return url;
     }
+
+    // i would remove this and replace with reqwest::set_query / reqwest::set_path
+    // but checking if its a path or query is not something i want to do now
+    // Later
 
     if url.ends_with("/") {
         // If the path starts with a '/', just append it without adding another '/'
