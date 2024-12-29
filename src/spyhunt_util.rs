@@ -2354,3 +2354,191 @@ mod webserver_scan {
         Some(())
     }
 }
+
+pub mod javascript_scan {
+    use {
+        colored::Colorize,
+        rayon::iter::{IntoParallelRefIterator, ParallelIterator},
+        scraper::{Html, Selector},
+        std::collections::HashMap,
+    };
+
+    pub fn isvalidurl(_url: String) -> bool {
+        return true;
+    }
+
+    pub async fn get_js_file(url: String) -> Vec<String> {
+        let session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|_err| {
+                warn!(format!("unable to create Client Session\n{}", _err));
+                panic!();
+            });
+
+        let response = session.get(url.clone()).send().await;
+        let mut js_files = Vec::new();
+        match response {
+            Ok(resp) => {
+                match resp.text().await {
+                    Ok(body) => {
+                        let document = Html::parse_document(&body);
+                        let script_selector = Selector::parse("script").unwrap();
+                        let link_selector = Selector::parse("link[rel='stylesheet']").unwrap();
+
+                        // Find all <script> tags with src attributes
+                        for element in document.select(&script_selector) {
+                            if let Some(src) = element.value().attr("src") {
+                                if let Ok(script_url) = reqwest::Url::parse(url.clone().as_str())
+                                    .and_then(|base| base.join(src))
+                                {
+                                    js_files.push(script_url.to_string());
+                                }
+                            }
+                        }
+
+                        // Regex for extracting JavaScript URLs
+                        let js_in_css_re =
+                            regex::Regex::new(r#"url\([\'\"]?(.*?\.js)[\'\"]?\)"#).unwrap();
+                        let js_in_script_re =
+                            regex::Regex::new(r#"[\'\"]([^\'\"]*\.js)[\'\"]"#).unwrap();
+
+                        // Find JavaScript files in <link> tags
+                        for link in document.select(&link_selector) {
+                            if let Some(href) = link.value().attr("href") {
+                                let css_url = reqwest::Url::parse(url.clone().as_str())
+                                    .unwrap()
+                                    .join(href)
+                                    .unwrap();
+                                if isvalidurl(css_url.to_string()) {
+                                    let css_response =
+                                        session.get(css_url.as_str()).send().await.unwrap();
+                                    let css_text = css_response.text().await.unwrap();
+                                    for js_match in js_in_css_re.captures_iter(&css_text) {
+                                        if let Some(js_path) = js_match.get(1) {
+                                            let js_url = css_url.join(js_path.as_str()).unwrap();
+                                            if isvalidurl(js_url.to_string()) {
+                                                js_files.push(js_url.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Find JavaScript files mentioned in inline <script> tags
+                        for script in document.select(&script_selector) {
+                            if let Some(script_content) = script.text().next() {
+                                for js_match in js_in_script_re.captures_iter(script_content) {
+                                    if let Some(js_path) = js_match.get(1) {
+                                        let js_url = reqwest::Url::parse(url.as_str())
+                                            .unwrap()
+                                            .join(js_path.as_str())
+                                            .unwrap();
+                                        if isvalidurl(js_url.to_string()) {
+                                            js_files.push(js_url.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Print the collected JavaScript file URLs
+                        for js_file in &js_files {
+                            println!("{}", js_file);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            Err(err) => {
+                if err.is_timeout() {
+                    warn!(format!("ERR: {url} Timedout"));
+                }
+            }
+        }
+        return js_files;
+    }
+
+    pub async fn analyze_js_file(js_url: String) -> (String, usize, HashMap<String, String>) {
+        use regex::Regex as r;
+        let interesting_patterns = HashMap::from([
+            (
+                "API Keys",
+                r::new(r#"(?i)(?:api[_-]?key|apikey)["\s:=]+(["\'][a-zA-Z0-9_\-]{20,}["\'])"#).unwrap(),
+            ),
+            (
+                "Passwords",
+                r::new(r#"(?i)(?:password|passwd|pwd)["\s:=]+(["\'][^"\']{8,}["\'])"#).unwrap(),
+            ),
+            (
+                "Tokens",
+                r::new(
+                    r#"(?i)(?:token|access_token|auth_token)["\s:=]+(["\'][a-zA-Z0-9_\-]{20,}["\'])"#,
+                ).unwrap(),
+            ),
+            (
+                "Sensitive Functions",
+                r::new(r#"(?i)(eval|setTimeout|setInterval)\s*\([^)]+\)"#).unwrap(),
+            ),
+        ]);
+        let mut content_len = 0;
+        let mut findings: HashMap<String, String> = HashMap::new();
+        let session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|_err| {
+                warn!(format!("unable to create Client Session\n{}", _err));
+                panic!();
+            });
+        match session.get(js_url.clone()).send().await {
+            Ok(resp) => match resp.text().await {
+                Ok(text) => {
+                    content_len = text.len();
+                    for (name, pattern) in interesting_patterns {
+                        for re_match in pattern.find_iter(text.clone().as_str()) {
+                            println!("Found match {name} {}", re_match.as_str());
+                            findings.insert(name.to_string(), re_match.as_str().to_string());
+                        }
+                    }
+                }
+                Err(_) => {}
+            },
+            Err(err) => {
+                if err.is_timeout() {
+                    warn!(format!("Err: {js_url} timedout."));
+                }
+            }
+        }
+        return (js_url, content_len, findings);
+    }
+
+    pub fn analyze_js_files_async_wrapper(url: String) -> (String, usize, HashMap<String, String>) {
+        let _runtime = tokio::runtime::Runtime::new().unwrap();
+        return _runtime.block_on(analyze_js_file(url));
+    }
+
+    pub async fn javascript_scan(url: String) {
+        let js_files = get_js_file(url).await;
+        if js_files.is_empty() {
+            return;
+        }
+
+        let analyzed_files: Vec<(String, usize, HashMap<String, String>)> = js_files
+            .par_iter()
+            .filter_map(|_file| {
+                let x = analyze_js_files_async_wrapper(_file.to_string());
+                Some(x)
+            })
+            .collect::<Vec<(String, usize, HashMap<String, String>)>>();
+
+        for file in &analyzed_files {
+            println!("{:#?}", file);
+        }
+    }
+}
