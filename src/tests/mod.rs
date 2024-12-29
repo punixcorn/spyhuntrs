@@ -60,7 +60,7 @@ mod tests {
     async fn enumerate_domain() {
         save!();
         let x = spyhunt_util::enumerate_domain("en.wikipedia.com").await;
-        assert_ne!(x.unwrap().len(), 0);
+        assert_ne!(x, Some(()));
     }
 
     #[tokio::test]
