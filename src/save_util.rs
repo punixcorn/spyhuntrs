@@ -80,7 +80,7 @@ pub fn save_str(buffer: &str) {
 macro_rules! handle_data {
     ($s:expr, &str) => {
         if save_util::check_if_save() {
-            if get_save_file().is_empty() {
+            if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
             save_util::save_str($s)
@@ -151,7 +151,7 @@ macro_rules! info_and_handle_data {
         for i in $vec {
             info!(format!("{i}"));
         }
-        if save_util::save_util::check_if_save() {
+        if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
