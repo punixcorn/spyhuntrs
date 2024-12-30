@@ -2741,3 +2741,343 @@ pub mod javascript_scan {
         }
     }
 }
+
+/// i can't...
+/// i mean , it has one more unique regex pattern it looks for , but?
+/// you couldn't have added this to the other 2 javascript searching functions?????????
+pub mod javascript_endpoints {
+    use crate::{request, save_util};
+    use colored::Colorize;
+    use rayon::prelude::*;
+
+    pub fn find_endpoints(js_content: String) -> Vec<String> {
+        let endpoint_pattern =
+            regex::Regex::new(r#"(?:"|\'|\`)(/(?:api/)?[\w-]+(?:/[\w-]+)*(?:\.\w+)?)"#).unwrap();
+
+        let matches: Vec<_> = endpoint_pattern
+            .find_iter(js_content.as_str())
+            .map(|m| m.as_str().to_string())
+            .collect();
+
+        matches
+    }
+
+    pub async fn analyze_js_files(url: String) -> (String, Vec<String>) {
+        println!(" - analyzing {url}");
+        let response = match fetch_url!(url.clone()) {
+            Ok(resp) => match resp.text().await {
+                Ok(text) => text,
+                Err(err) => {
+                    warn!(format!("Err : {err}"));
+                    return (String::new(), vec![String::new()]);
+                }
+            },
+            Err(err) => {
+                warn!(format!("Err : {err}"));
+                return (String::new(), vec![String::new()]);
+            }
+        };
+
+        let endpoints = find_endpoints(response);
+
+        (url, endpoints)
+    }
+    pub fn analyze_js_files_wrapper(js_url: String) -> (String, Vec<String>) {
+        let _runtime = tokio::runtime::Runtime::new().unwrap();
+        _runtime.block_on(analyze_js_files(js_url))
+    }
+
+    pub async fn process_js_files(js_urls: Vec<String>) {
+        let js_files: Vec<String> = Vec::new();
+        let results: Vec<(String, Vec<String>)> = js_urls
+            .par_iter()
+            .filter_map(|url| {
+                let data = analyze_js_files_wrapper(url.clone());
+                Some(data)
+            })
+            .collect();
+
+        if results.is_empty() {
+            warn!(format!("no results found"));
+        }
+
+        for (url, vec) in results {
+            info_and_handle_data!(url, String);
+            if vec.is_empty() {
+                warn!("No results found");
+            } else {
+                for i in vec {
+                    println!(" |-{}", i);
+                    handle_data!(format!(" |-{}", i), String);
+                }
+            }
+        }
+    }
+}
+
+pub mod param_miner {
+    use std::collections::HashMap;
+
+    use super::xss_scan;
+    use crate::{
+        file_util::{file_exists, read_from_file},
+        request::urljoin,
+        save_util,
+    };
+    use colored::Colorize;
+    use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+    use reqwest::{header::HeaderMap, Response};
+
+    pub fn detect_reflection(response: String, headers: HeaderMap, payload: String) -> bool {
+        if response.contains(&payload) {
+            return true;
+        }
+
+        if headers.contains_key(payload.clone()) {
+            return true;
+        }
+        let mut return_value = false;
+        headers.values().for_each(|val| {
+            match val.to_str() {
+                Ok(ok) => {
+                    if ok == payload.as_str() {
+                        return_value = true;
+                    }
+                }
+                _ => {}
+            };
+        });
+        return_value
+    }
+
+    pub fn analyze_response_difference(
+        orginal_response_text: String,
+        modified_response: String,
+    ) -> bool {
+        if orginal_response_text.len() != modified_response.len() {
+            return true;
+        }
+        return false;
+    }
+
+    pub enum param_miner_result {
+        reflected,
+        potential,
+        status_changed,
+        nil,
+    }
+    pub async fn brute_force_parameter(
+        url: String,
+        param: String,
+        orginal_response_text: String,
+    ) -> (String, param_miner_result) {
+        let payload: String = xss_scan::generate_random_string(10);
+        let mut fullurl = validate_url!(url.clone());
+
+        if url.contains("?") {
+            fullurl += "&";
+        } else {
+            fullurl += "?";
+        }
+
+        let test_url = format!("{fullurl}{param}={payload}");
+
+        let session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            });
+        let mut headers: HeaderMap = HeaderMap::new();
+        let text = match session.get(test_url.clone()).send().await {
+            Ok(resp) => {
+                headers = resp.headers().clone();
+                match resp.text().await {
+                    Ok(data) => data,
+                    Err(_) => "".to_string(),
+                }
+            }
+            Err(err) => {
+                if err.is_timeout() {
+                    warn!(format!("Err {test_url} Connection timedout"));
+                }
+                "".to_string()
+            }
+        };
+
+        if text.is_empty() {
+            warn!("No data retrieved");
+            return ("".to_string(), param_miner_result::nil);
+        }
+
+        if detect_reflection(text.clone(), headers, payload.clone()) {
+            info!("Reflected parametet Found");
+            return (param, param_miner_result::reflected);
+        };
+
+        if analyze_response_difference(text, orginal_response_text) {
+            info!(" Potential parameter found (response changed)");
+            return (param, param_miner_result::potential);
+        }
+
+        return ("".to_string(), param_miner_result::nil);
+    }
+
+    pub async fn scan_common_parameters(url: String) -> Vec<String> {
+        info!(format!("Performing common parameter scan on {url}"));
+        let common_params: Vec<&str> = vec![
+            "id", "page", "search", "q", "query", "file", "filename", "path", "dir",
+        ];
+
+        let orginal_text = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            })
+            .get(url.clone())
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+
+        let mut found_params: Vec<String> = Vec::new();
+
+        for param in common_params {
+            let (result, _) =
+                brute_force_parameter(url.clone(), param.to_string().clone(), orginal_text.clone())
+                    .await;
+
+            if !result.len() == 0 {
+                println!(" |-param: {}", result.clone());
+                found_params.push(result.clone());
+            }
+        }
+
+        return found_params;
+    }
+
+    pub async fn extract_parameters_from_html(url: String) -> Vec<String> {
+        info!(format!(
+            "Performing parameter extraction from html on {url}"
+        ));
+        let orginal_text = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            })
+            .get(url.clone())
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let form_params = regex::Regex::new(r#"name=["\']([^"\']+)["\']"#).unwrap();
+        let js_params =
+            regex::Regex::new(r#"(?:get|post)\s*\(\s*["\'][^"\']*\?([^"\'&]+)="#).unwrap();
+
+        let mut form_matches: Vec<_> = form_params
+            .find_iter(orginal_text.as_str())
+            .map(|text| text.as_str().to_string())
+            .collect();
+
+        let mut js_matches: Vec<_> = js_params
+            .find_iter(orginal_text.as_str())
+            .map(|text| text.as_str().to_string())
+            .collect();
+
+        form_matches.append(&mut js_matches);
+        return form_matches;
+    }
+
+    pub fn brute_force_parameter_async_wrapper(
+        url: String,
+        param: String,
+        orginal_response_text: String,
+    ) -> (String, param_miner_result) {
+        let _runtime = tokio::runtime::Runtime::new().unwrap();
+        _runtime.block_on(brute_force_parameter(url, param, orginal_response_text))
+    }
+
+    pub async fn param_miner(url: String, wordlist: String) -> Option<()> {
+        let orginal_text = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            })
+            .get(url.clone())
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+
+        let mut common_params = scan_common_parameters(url.clone()).await;
+        let mut extracted_params = extract_parameters_from_html(url.clone()).await;
+
+        if !file_exists(&wordlist) {
+            warn!(format!("Wordlist file not found : {wordlist}"));
+            return None;
+        }
+        let mut wordlists = read_from_file(wordlist.clone()).unwrap();
+
+        let mut all_params = Vec::new();
+        all_params.append(&mut common_params);
+        all_params.append(&mut extracted_params);
+        all_params.append(&mut wordlists);
+
+        info!("Testing all parameters");
+        let results = all_params
+            .par_iter()
+            .filter_map(|param| {
+                Some(brute_force_parameter_async_wrapper(
+                    url.clone(),
+                    param.to_string(),
+                    orginal_text.clone(),
+                ))
+            })
+            .collect::<Vec<(String, param_miner_result)>>();
+
+        let get_param_miner_str = |p: param_miner_result| -> &str {
+            use param_miner_result::*;
+            match p {
+                reflected => "reflected",
+                potential => "potential",
+                status_changed => "status_changed",
+                _ => "nil",
+            }
+        };
+        for res in results {
+            match res.1 {
+                param_miner_result::nil => {}
+                _ => {
+                    let strr = format!(" |-{}: {}", res.0, get_param_miner_str(res.1));
+                    handle_data!(strr.clone(), String);
+                    println!("{}", strr);
+                }
+            };
+        }
+        Some(())
+    }
+}
+
+/// not trusted
+pub fn haveibeenpwned() {}
