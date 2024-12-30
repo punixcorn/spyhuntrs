@@ -62,12 +62,12 @@ functions in the file [ WORKING 38/52 ]
 - [x] sqli scan
 - [x] webserver scan
 - [x] javascript scan
-- [] javascript enpoints
-- [] param miner
+- [x] javascript enpoints
+- [x] param miner
 - [] custom headers
 - [] open redirect
 - [] utomoussystemnumber
-- [] have i been pwned
+- [x] ~~have i been pwned~~ Non trusted Website
 - [] subdomain takeover
 - [] auto recon
 - [] jwt scan
