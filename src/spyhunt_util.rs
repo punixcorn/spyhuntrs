@@ -284,18 +284,30 @@ pub async fn status_code_reqwest(domain: &str) -> Option<()> {
 /// enumate domain for server info and ip [completed]
 pub async fn enumerate_domain(domain: &str) -> Option<()> {
     let mut server: &str = "unknown";
-    let resp = fetch_url_unwrap!(domain.to_string());
+
+    let mut resp: Response;
+    match fetch_url!(domain.to_string()) {
+        Ok(r) => resp = r,
+        Err(err) => {
+            warn!(format!("Err : {err}"));
+            return None;
+        }
+    };
+
     let mut domain_ip: String = String::new();
 
-    match dns_lookup::lookup_host(domain) {
+    match dns_lookup::lookup_host(
+        domain
+            .trim()
+            .replace("https://", "")
+            .replace("http://", "")
+            .as_str(),
+    ) {
         Ok(ips) => {
             match Some(ips) {
                 Some(ip) => {
                     match ip.get(0) {
                         Some(v4) => {
-                            // let ip_v4 = v4.to_string();
-                            // info!(format!("{d} : [{ip_v4}]"));
-                            // handle_data!(ip_v4, String);
                             domain_ip = v4.to_string();
                         }
                         _ => {
@@ -771,7 +783,191 @@ pub fn wayback_urls(domain: String) {
 }
 
 /// a namespace for javascript functions
-mod javascript {}
+mod javascript {
+    use {
+        crate::{request, save_util},
+        colored::Colorize,
+        rayon::iter::{IntoParallelRefIterator, ParallelIterator},
+        reqwest::Url,
+        scraper::selectable::Selectable,
+        std::{collections::HashMap, hash::Hash},
+    };
+
+    pub fn is_valid_url(url: String) -> bool {
+        match reqwest::Url::parse(url.as_str()) {
+            Ok(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_same_domain(url: String, domain: String) -> bool {
+        match reqwest::Url::parse(url.as_str()) {
+            Ok(_url) => match _url.domain() {
+                Some(_domain) => {
+                    if domain == _domain.to_string() {
+                        return true;
+                    }
+                }
+                _ => {
+                    return false;
+                }
+            },
+            Err(err) => return false,
+        }
+        false
+    }
+
+    pub async fn get_js_links(url: String, Domain: Option<String>) -> (Vec<String>, Vec<String>) {
+        let session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(2))
+            .timeout(std::time::Duration::new(10, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            });
+        // if no domain, exit
+        let domain = match Domain {
+            Some(d) => d,
+            None => return (vec![], vec![]),
+        };
+
+        let mut html = String::new();
+        match session.get(url.clone()).send().await {
+            Ok(resp) => match resp.text().await {
+                Ok(text) => html = text.to_owned(),
+
+                Err(_) => {
+                    warn!(format!("Failed to data from {url}"));
+                    return (vec![], vec![]);
+                }
+            },
+            Err(err) => {
+                if err.is_timeout() {
+                    warn!(format!("Err {url} Timedout"));
+                }
+            }
+        };
+        let mut js_files: Vec<String> = Vec::new();
+        let document = scraper::Html::parse_document(&html);
+        let script_selector = scraper::Selector::parse("script").unwrap();
+
+        // Find all <script> tags with src attributes
+        for element in document.select(&script_selector) {
+            if let Some(src) = element.value().attr("src") {
+                if let Ok(script_url) =
+                    reqwest::Url::parse(url.clone().as_str()).and_then(|base| base.join(src))
+                {
+                    js_files.push(script_url.to_string());
+                }
+            }
+        }
+
+        let js_in_script_re = regex::Regex::new(r#"[\'\"]([^\'\"]*\.js)[\'\"]"#).unwrap();
+
+        // Find JavaScript files in using regex
+        for script in document.select(&script_selector) {
+            if let Some(val) = script.text().next() {
+                for i in js_in_script_re.captures_iter(val) {
+                    if let Some(__url) = i.get(1) {
+                        let full_url = match reqwest::Url::parse(url.clone().as_str())
+                            .unwrap()
+                            .join(__url.as_str())
+                        {
+                            Ok(ok_data) => ok_data,
+                            Err(_) => continue,
+                        };
+
+                        if is_valid_url(full_url.to_string())
+                            && is_same_domain(url.clone(), full_url.to_string())
+                        {
+                            js_files.push(full_url.to_string().clone());
+                        }
+                    }
+                }
+            }
+        }
+        let mut newlinks: Vec<String> = Vec::new();
+        let a_tags = scraper::Selector::parse("a[href]").unwrap();
+
+        let base_url = reqwest::Url::parse(url.as_str()).unwrap();
+
+        for element in document.select(&a_tags) {
+            if let Some(href) = element.value().attr("href") {
+                // damn i didn't know you could do if Ok(val) = x {}
+                if let Ok(full_url) = base_url.join(href) {
+                    newlinks.push(full_url.to_string());
+                }
+            }
+        }
+        return (js_files, newlinks);
+    }
+
+    pub fn get_js_links_async_wrapper(
+        url: String,
+        Domain: Option<String>,
+    ) -> (Vec<String>, Vec<String>) {
+        let _runtime = tokio::runtime::Runtime::new().unwrap();
+        _runtime.block_on(get_js_links(url, Domain))
+    }
+
+    /// Takes a Vec of Urls
+    /// - Finds the domain
+    /// - Searches through the url to find js Links and js Files
+    /// - prints them out
+    ///
+    /// Takes Vec of urls because it runs multithreading
+    pub fn crawl_website(urls: Vec<String>) -> Option<()> {
+        /*
+         * i will use tokio::Semaphore later when i grasp it
+         */
+        if urls.is_empty() {
+            return None;
+        }
+
+        let results: Vec<HashMap<&String, (Vec<String>, Vec<String>)>> = urls
+            .par_iter()
+            .filter_map(|url| {
+                let domain: Option<String> = match reqwest::Url::parse(url.as_str()) {
+                    Ok(_url) => match _url.domain() {
+                        Some(d) => Some(d.to_string()),
+                        _ => None,
+                    },
+                    Err(_) => None,
+                };
+                let data =
+                    get_js_links_async_wrapper(url.to_string(), Some("".to_string()).clone());
+                Some(HashMap::from([(url, (data))]))
+            })
+            .collect();
+
+        for hashmap in results {
+            for (url, vecs) in hashmap {
+                info_and_handle_data!(format!("url :{url}"), String);
+                if vecs.0.is_empty() {
+                    println!("no javascript files found")
+                } else {
+                    println!(" *Javascript Files");
+                    for _js_files in vecs.0 {
+                        println!(" |-{}", _js_files);
+                        handle_data!(format!(" |-{}", _js_files), String);
+                    }
+                }
+                if vecs.1.is_empty() {
+                    println!("no javascript files found")
+                } else {
+                    println!(" *Javascript Links");
+                    for _js_links in vecs.1 {
+                        println!(" |-{}", _js_links);
+                        handle_data!(format!(" |-{}", _js_links), String);
+                    }
+                }
+            }
+        }
+        return Some(());
+    }
+}
 
 /// run a dns scan on domain
 pub fn dns(domain: String) {
@@ -2363,8 +2559,11 @@ pub mod javascript_scan {
         std::collections::HashMap,
     };
 
-    pub fn isvalidurl(_url: String) -> bool {
-        return true;
+    pub fn is_valid_url(url: String) -> bool {
+        match reqwest::Url::parse(url.as_str()) {
+            Ok(_) => true,
+            _ => false,
+        }
     }
 
     pub async fn get_js_file(url: String) -> Vec<String> {
@@ -2412,14 +2611,14 @@ pub mod javascript_scan {
                                     .unwrap()
                                     .join(href)
                                     .unwrap();
-                                if isvalidurl(css_url.to_string()) {
+                                if is_valid_url(css_url.to_string()) {
                                     let css_response =
                                         session.get(css_url.as_str()).send().await.unwrap();
                                     let css_text = css_response.text().await.unwrap();
                                     for js_match in js_in_css_re.captures_iter(&css_text) {
                                         if let Some(js_path) = js_match.get(1) {
                                             let js_url = css_url.join(js_path.as_str()).unwrap();
-                                            if isvalidurl(js_url.to_string()) {
+                                            if is_valid_url(js_url.to_string()) {
                                                 js_files.push(js_url.to_string());
                                             }
                                         }
@@ -2437,7 +2636,7 @@ pub mod javascript_scan {
                                             .unwrap()
                                             .join(js_path.as_str())
                                             .unwrap();
-                                        if isvalidurl(js_url.to_string()) {
+                                        if is_valid_url(js_url.to_string()) {
                                             js_files.push(js_url.to_string());
                                         }
                                     }

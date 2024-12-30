@@ -1,4 +1,4 @@
-![img](./spyhunt_logo_cropped.png)
+![Img](./spyhunt_logo_cropped.png)
 
 # Spyhuntrs
 
@@ -6,7 +6,7 @@ Everything in **spyhunt** but with a better save feature and written (poorly) in
 
 # Important stuff to do
 
-- [x] Tests [not Compeleted]
+- [x] Tests [not Completed]
 - [] better error handling (for requests)
 - [] Documentation
 - [] rename files
@@ -36,7 +36,7 @@ functions in the file [ WORKING 38/52 ]
 - [x] securityheaders
 - [x] networkanalyzer
 - [x] waybackurls
-- [] javascript
+- [x] javascript
 - [x] dns
 - [x] probe
 - [x] redirects
@@ -61,7 +61,7 @@ functions in the file [ WORKING 38/52 ]
 - [x] xss scan
 - [x] sqli scan
 - [x] webserver scan
-- [] javascript scan
+- [x] javascript scan
 - [] javascript enpoints
 - [] param miner
 - [] custom headers

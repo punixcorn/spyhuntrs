@@ -45,7 +45,7 @@ mod waybackmachine;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     banner::print_simple_banner();
-    let target: String = "en.wikipedia.com".to_string();
+    let target: String = "en.wikipedia.org".to_string();
     let domain: String = target.clone();
     let domains = ["google.com", "food.com", "en.wikipedia.com"];
     if check_if_save() {
@@ -64,22 +64,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         spyhunt_util::webcrawler(domains.to_vec());
         spyhunt_util::status_code(target.clone().as_str());
 
-        spyhunt_util::enumerate_domain(target.as_str())
-            .await
-            .unwrap();
 
         let api_key: String = "XBB0IcjOcI5dAZ1ZwAXSr4U5ChL8HAk8".to_string();
         spyhunt_util::shodan_api(api_key, "spankki.fi".to_string(), false).await;
-        spyhunt_util::status_code_reqwest(target.as_str()).await;
         spyhunt_util::status_code(target.as_str());
         spyhunt_util::run_cors_misconfig_threads([target.as_str()].to_vec()).await;
         spyhunt_util::run_cors_misconfig_threads(domains.to_vec()).await;
         let x = favicon::init();
         println!("{:#?}", x);
-        match spyhunt_util::get_favicon_hash("https://www.skype.com/en/".to_string()).await {
-            Some(k) => println!("{:#?}", k),
-            None => (),
-        };
         spyhunt_util::probe(domain.clone());
         spyhunt_util::network_analyzer(target.clone());
         spyhunt_util::redirects(target.clone());
@@ -105,6 +97,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         spyhunt_util::cidr_notation::cidr_notation("127.0.0.1");
         spyhunt_util::print_all_ips("127.0.0.1").unwrap();
     */
+
+    // match spyhunt_util::get_favicon_hash("https://www.skype.com/en/".to_string()).await {
+    //     Some(k) => println!("{:#?}", k),
+    //     None => (),
+    // };
+    // spyhunt_util::status_code_reqwest(target.as_str()).await;
+    spyhunt_util::enumerate_domain("en.wikipedia.org")
+        .await
+        .unwrap();
+    spyhunt_util::enumerate_domain("https://en.wikipedia.org")
+        .await
+        .unwrap();
 
     Ok(())
 }

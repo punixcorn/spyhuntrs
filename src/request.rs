@@ -33,18 +33,19 @@ pub fn urljoin(mut url: String, path: String) -> String {
     // i could split it by the ://
     // but i would need a map of all scheme to check
     // and i hope reqwest has a map it checks by
+
     match parse_url {
         Ok(_url) => {
-            if !_url.scheme().is_empty() {
+            if _url.scheme().is_empty() {
                 url.insert_str(0, "https://");
             }
         }
-        Err(_) => {}
+        Err(_) => {
+            if !url.starts_with("https://") && !url.starts_with("http://") {
+                url.insert_str(0, "https://");
+            }
+        }
     }
-
-    // if !url.starts_with("https://") && !url.starts_with("http://") {
-    //     url.insert_str(0, "https://");
-    // }
 
     if path.is_empty() {
         return url;
@@ -86,5 +87,12 @@ macro_rules! fetch_url_unwrap {
 macro_rules! fetch_url {
     ($url : expr ) => {
         request::fetch(request::urljoin($url, "".to_string()), "".to_string()).await
+    };
+}
+
+#[macro_export]
+macro_rules! validate_url {
+    ($url :expr ) => {
+        urljoin($url, "".to_string())
     };
 }
