@@ -3,20 +3,20 @@
 
 use crate::{
     file_util::{file_exists, write_to_file},
-    save, save_file,
+    save_file, Save,
 };
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 
 /// checks if the save option was set in args
 pub fn check_if_save() -> bool {
-    let x = save.lock().unwrap();
+    let x = Save.lock().unwrap();
     return x.clone();
 }
 
 /// sets the save option state vaule
 pub fn set_save_option(value: bool) {
-    let mut x = save.lock().unwrap();
+    let mut x = Save.lock().unwrap();
     *x = value;
 }
 

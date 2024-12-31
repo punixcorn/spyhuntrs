@@ -3081,3 +3081,651 @@ pub mod param_miner {
 
 /// not trusted
 pub fn haveibeenpwned() {}
+
+pub mod custom_headers {
+
+    use crate::save_util::save_vec_strings;
+    use crate::{file_util, request};
+    use colored::Colorize;
+    use regex::bytes::Match;
+    use reqwest::redirect::Policy;
+    use reqwest::{
+        self,
+        header::{HeaderMap, HeaderName, HeaderValue},
+        Method, RequestBuilder,
+    };
+    use reqwest::{Proxy, Url};
+    use scraper::{self, Selector};
+    use std::fmt::{self, format};
+    use std::hash::Hash;
+    use std::time::SystemTime;
+    use std::{collections::HashMap, time::Instant};
+
+    #[derive(Debug, Clone)]
+    pub struct request_info {
+        pub url: String,
+        pub method: Option<String>,
+        pub custom_heaaders: Option<HashMap<String, String>>,
+        pub data: Option<String>, // shit is never used
+        pub params: Option<(String, String)>,
+        pub auth: Option<String>,
+        pub proxies: Option<String>,
+        pub allow_redirects: Option<bool>,
+        pub verbose: Option<bool>,
+    }
+    impl request_info {
+        pub fn new() -> Self {
+            Self {
+                url: String::new(),
+                method: None,
+                custom_heaaders: None,
+                data: None,
+                params: None,
+                auth: None,
+                proxies: None,
+                allow_redirects: None,
+                verbose: None,
+            }
+        }
+    }
+    impl fmt::Display for request_info {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let mut print_str: String = String::new();
+
+            print_str += format!("[URL]:{}\n", self.url.clone()).as_str();
+
+            if let Some(_method) = &self.method {
+                print_str += format!("[METHOD]: {}\n", _method).as_str();
+            }
+
+            if let Some(_cheaders) = &self.custom_heaaders {
+                let mut __headers: String = String::new();
+                for (k, v) in _cheaders.iter() {
+                    __headers += format!(" ({k}:{v}) ").as_str();
+                }
+                print_str += format!("[CUSTOM HEADERS]: {}\n", __headers).as_str();
+            }
+
+            if let Some(_params) = &self.params {
+                print_str += format!("[PARAMS]: {}:{}\n", _params.0, _params.1).as_str();
+            }
+
+            if let Some(_auth) = &self.auth {
+                print_str += format!("[AUTH]: {}\n", _auth).as_str();
+            }
+
+            if let Some(_proxy) = &self.proxies {
+                print_str += format!("[PROXY]: {}\n", _proxy).as_str();
+            }
+            if let Some(_allow_redirect) = &self.allow_redirects {
+                print_str += format!("[ALLOW REDIRECT]: {}\n", _allow_redirect).as_str();
+            }
+
+            write!(f, "{}", print_str)
+        }
+    }
+    pub fn extract_links(content: String, url: String) {
+        let document = scraper::Html::parse_document(&content);
+        let mut newlinks: Vec<String> = Vec::new();
+        let a_tags = scraper::Selector::parse("a[href]").unwrap();
+
+        let base_url = reqwest::Url::parse(url.as_str()).unwrap();
+
+        for element in document.select(&a_tags) {
+            if let Some(href) = element.value().attr("href") {
+                if let Ok(full_url) = base_url.join(href) {
+                    newlinks.push(full_url.to_string());
+                }
+            }
+        }
+    }
+
+    // url: String,
+    // method: Option<String>,
+    // custom_heaaders: Option<HashMap<String, String>>,
+    // data: Option<String>, // shit is never used
+    // params: Option<(String, String)>,
+    // auth: Option<String>,
+    // proxies: Option<String>,
+    // allow_redirects: Option<bool>,
+    // verbose: Option<bool>,
+    pub async fn send_request(req: request_info) -> (u64, Option<reqwest::Response>, u16) {
+        let mut builder = reqwest::Client::builder();
+        let mut request: RequestBuilder;
+        let mut url = req.url.clone();
+
+        /* values to insert into request*/
+        let mut Headers: HeaderMap = HeaderMap::new();
+
+        if let Some(_allow_redirects) = req.allow_redirects {
+            builder = builder.redirect(Policy::limited(10));
+        }
+
+        if let Some(_proxy) = req.proxies {
+            builder = builder.proxy(Proxy::all(_proxy).unwrap());
+        }
+
+        /* modify Session */
+
+        let mut session = builder.build().unwrap();
+
+        if let Some(_method) = req.method {
+            match _method.to_lowercase().as_str() {
+                "put" => {
+                    request = session.put(url);
+                }
+                "patch" => {
+                    request = session.patch(url);
+                }
+                "post" => {
+                    request = session.post(url);
+                }
+                "get" => {
+                    request = session.get(url);
+                }
+                _ => {
+                    request = session.get(url);
+                }
+            }
+        } else {
+            request = session.get(url);
+        }
+
+        if let Some(_auth) = req.auth {
+            let _place = match _auth.find(":") {
+                Some(place) => place,
+                None => match _auth.find(" ") {
+                    Some(place) => place,
+                    None => {
+                        warn!("Could not get password and username\nEnter in  \"username:password\" or \"username password\"");
+                        0
+                    }
+                },
+            };
+            if _place != 0 {
+                let (username, password) = _auth.split_at(_place);
+                request = request.basic_auth(username, Some(password));
+            }
+        }
+
+        if let Some(_params) = req.params {
+            if !_params.0.is_empty() && !_params.1.is_empty() {
+                request = request.query(&_params);
+            } else {
+                warn!("Could not parse Params, enter Header and value seperated by a whitespace\nEg: Connection Close");
+            }
+        }
+
+        if let Some(_header) = req.custom_heaaders {
+            for (k, v) in _header {
+                Headers.insert(
+                    k.parse::<HeaderName>().unwrap(),
+                    v.parse::<HeaderValue>().unwrap(),
+                );
+            }
+        }
+
+        request = request.headers(Headers);
+        let mut resp: Option<reqwest::Response> = None;
+        let mut status: u16 = 0;
+        let start = Instant::now();
+        let mut finish = std::time::Duration::from_secs(0);
+        match request.send().await {
+            Ok(res) => {
+                finish = start.elapsed();
+                status = res.status().as_u16();
+                resp = Some(res);
+            }
+            Err(err) => {
+                if err.is_timeout() {
+                    warn!("Request Timedout");
+                }
+                if err.is_request() {
+                    warn!("Err from request");
+                }
+                if err.is_connect() {
+                    warn!("Err from connection issue");
+                }
+            }
+        }
+
+        return (finish.as_secs(), resp, status);
+    }
+
+    pub async fn custom_headers(initial_url: String) -> () {
+        // let mut url: String = String::new();
+        // let mut method: Option<String> = None;
+        // let mut custom_heaaders: Option<HashMap<String, String>> = None;
+        // let mut data: Option<String> = None;
+        // let mut params: Option<(String, String)> = None;
+        // let mut auth: Option<String> = None;
+        // let mut proxies: Option<String> = None;
+        // let mut allow_redirects: Option<bool> = None;
+        // let mut verbose: Option<bool> = None;
+
+        let mut _request_info: request_info = request_info::new();
+        let mut verbose: bool = false;
+        let mut save_to_file: bool = false;
+        let mut path: String = String::new();
+        _request_info.url = initial_url.clone();
+
+        loop {
+            let mut input = String::new();
+            println!("Do you want to scan a file or a single target?[f,t,file,target]:");
+            println!("\nCurrent URL: {}", _request_info.url.clone());
+            println!("\nOptions:");
+            println!("1. Send The request");
+            println!("2. Add custom header");
+            println!("3. Change request method");
+            println!("4. Change URL");
+            println!("5. Load headers from file");
+            println!("6. Set authentication");
+            println!("7. Set proxy");
+            println!("8. Toggle redirect following");
+            println!("9. Save response to file");
+            println!("10. Trip Verbose: Prints INFO before sending");
+            println!("11. Exit");
+
+            std::io::stdin().read_line(&mut input).unwrap();
+
+            match input.parse::<i32>() {
+                Ok(int) => {
+                    match int {
+                        1 => {
+                            if _request_info.url.len() == 0 {
+                                println!("No url loaded");
+                            } else {
+                                if verbose {
+                                    println!("Sending request\n{}", _request_info);
+                                } else {
+                                    println!("Sending request...");
+                                }
+                                let (time, resp, status) =
+                                    send_request(_request_info.clone()).await;
+
+                                println!("[time]: {}\n[status code]: {}", time, status);
+
+                                let mut buffer: Vec<String> = Vec::new();
+                                if save_to_file {
+                                    save_to_file = false; // reset
+                                    println!("Writing response to file...");
+                                    if let Some(res) = resp {
+                                        match res.text().await {
+                                            Ok(text) => {
+                                                let b = text.split('\n').collect::<Vec<&str>>();
+
+                                                for i in b {
+                                                    buffer.push(i.to_string());
+                                                }
+                                            }
+                                            Err(..) => {
+                                                warn!("Could not save data to file");
+                                            }
+                                        }
+                                    }
+                                    match file_util::write_to_file(buffer, path.clone()) {
+                                        Ok(..) => {
+                                            println!("Successful");
+                                        }
+                                        Err(..) => {
+                                            println!("Failed");
+                                        }
+                                    }
+                                };
+                            }
+                        }
+                        2 => {
+                            let mut n: String = String::new();
+                            println!("Enter header as: <Header> <Value>");
+                            std::io::stdin().read_line(&mut n).unwrap();
+
+                            // incase of human error
+                            n = n.replace(">", "").replace("<", "");
+
+                            let x: Vec<_> = n.split(' ').collect();
+                            if x.len() != 2 {
+                                warn!("incorrect formating");
+                            } else {
+                                let mut map = HashMap::from([(x[0].to_string(), x[1].to_string())]);
+                                if let Some(ref _map) = _request_info.custom_heaaders {
+                                    for (k, v) in _map {
+                                        map.insert(k.to_string(), v.to_string());
+                                    }
+                                }
+
+                                _request_info.custom_heaaders = Some(map);
+                                println!("Added Headers");
+                            }
+                        }
+                        3 => {
+                            let mut n: String = String::new();
+                            println!("Available methods: GET POST PATCH PUT");
+                            std::io::stdin().read_line(&mut n).unwrap();
+                            _request_info.method = Some(n);
+                            println!("Method set");
+                        }
+                        4 => {
+                            let mut n: String = String::new();
+                            println!("Enter new url");
+                            std::io::stdin().read_line(&mut n).unwrap();
+                            match reqwest::Url::parse(n.as_str()) {
+                                Ok(..) => {
+                                    _request_info.url = n.clone();
+                                    println!("url: {} is set", n.clone());
+                                }
+                                Err(..) => {
+                                    warn!("Url invalid, please add scheme if it doesn't have one eg https://www.example.com");
+                                }
+                            }
+                        }
+                        5 => {
+                            let mut n: String = String::new();
+                            println!("Enter Filename");
+                            println!("Make sure Content in file is formatted into:");
+                            println!("Header Value");
+                            std::io::stdin().read_line(&mut n).unwrap();
+
+                            if !file_util::file_exists(&n) {
+                                warn!(format!("file {} does not exist", n.clone()));
+                            } else {
+                                let headers = file_util::read_from_file(n.clone());
+                                match headers {
+                                    Ok(h) => {
+                                        let mut map: HashMap<String, String> = HashMap::new();
+                                        // let mut map =
+                                        //     HashMap::from([(x[0].to_string(), x[1].to_string())]);
+                                        let mut had_errors_processing = false;
+
+                                        for line in h {
+                                            let x: Vec<_> = line.split(' ').collect();
+                                            if x.len() == 2 {
+                                                map.insert(x[0].to_string(), x[1].to_string());
+                                            } else {
+                                                had_errors_processing = true;
+                                            }
+                                        }
+
+                                        if had_errors_processing {
+                                            println!("Had errors when processing lines to headers");
+                                        }
+
+                                        if let Some(ref _map) = _request_info.custom_heaaders {
+                                            for (k, v) in _map {
+                                                map.insert(k.to_string(), v.to_string());
+                                            }
+                                        }
+                                        _request_info.custom_heaaders = Some(map.clone());
+                                    }
+                                    Err(..) => {
+                                        warn!(format!("Failed to read from file {n}"));
+                                    }
+                                }
+                                println!("setting custom headers from file done");
+                            }
+                        }
+                        6 => {
+                            println!(
+                                "Enter authentication: username:password or username password"
+                            );
+                            let mut n: String = String::new();
+                            std::io::stdin().read_line(&mut n).unwrap();
+                            _request_info.auth = Some(n);
+                            println!("Setting auth Done");
+                        }
+                        7 => {
+                            println!("Enter proxy link :");
+                            let mut n: String = String::new();
+                            std::io::stdin().read_line(&mut n).unwrap();
+                            _request_info.proxies = Some(n);
+                            println!("Setting Proxy Done");
+                        }
+                        8 => {
+                            if let Some(state) = _request_info.allow_redirects {
+                                _request_info.allow_redirects = Some(!state);
+                            } else {
+                                _request_info.allow_redirects = Some(true);
+                            }
+                            println!("Toggled redirect following");
+                        }
+                        9 => {
+                            println!("9.Enter filename:");
+                            let mut n: String = String::new();
+                            std::io::stdin().read_line(&mut n).unwrap();
+                            save_to_file = true;
+                            path = n.clone();
+                        }
+                        10 => {
+                            verbose = !verbose;
+                            println!("Toggled verbose to : {verbose}");
+                        }
+                        11 => {
+                            println!("Exiting...");
+                            break;
+                        }
+                        _ => {
+                            println!("Invalid option,pick between 1-11");
+                        }
+                    };
+                }
+                Err(_) => {
+                    println!("Enter a valid option");
+                }
+            }
+        }
+    }
+}
+
+pub mod open_redirect {
+    use crate::request;
+    use crate::save_util;
+    use cidr::parsers;
+    use colored::Colorize;
+    use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+    use reqwest::Url;
+    use tokio::runtime;
+
+    pub async fn test_single_payload(
+        url: String,
+        payload: String,
+        original_domain: String,
+        test_domain: &str,
+    ) -> (String, String) {
+        info!(format!("Testing {url}"));
+        let full_url = request::urljoin(url.clone(), payload);
+        let Session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(0))
+            .timeout(std::time::Duration::new(5, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            });
+
+        let resp = Session.get(full_url.clone()).send().await;
+        match resp {
+            Ok(res) => match res.status().as_u16() {
+                301 | 302 | 303 | 307 | 308 => {
+                    let location = res.headers().get(reqwest::header::LOCATION);
+                    let mut __domain: String = String::new();
+
+                    if let Some(_location) = location {
+                        if Url::parse(_location.to_str().unwrap_or("")).is_ok() {
+                            __domain = _location.to_str().unwrap().to_string();
+                        } else if Url::parse(
+                            format!("{full_url}{}", _location.to_str().unwrap_or("")).as_str(),
+                        )
+                        .is_ok()
+                        {
+                            __domain =
+                                format!("{full_url}{}", _location.to_str().unwrap().to_string());
+                        }
+                    }
+
+                    if Url::parse(original_domain.clone().as_str())
+                        .unwrap()
+                        .domain()
+                        .unwrap()
+                        != Url::parse(__domain.as_str()).unwrap().domain().unwrap()
+                    {
+                        if test_domain == Url::parse(__domain.as_str()).unwrap().domain().unwrap() {
+                            info!(format!(" |-Vulnerable: Redirects to {__domain}"));
+                            return (full_url, __domain);
+                        }
+                    }
+                }
+                403 => {
+                    println!(" |-{url}: Forbidden");
+                }
+                _ => {}
+            },
+            Err(err) => {
+                if err.is_timeout() {
+                    warn!("Err: connection timedout");
+                }
+            }
+        }
+        return ("".to_string(), "".to_string());
+    }
+
+    pub fn test_open_redirect_async_wrapper(
+        url: String,
+        payload: String,
+        original_domain: String,
+        test_domain: &str,
+    ) -> (String, String) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        return runtime.block_on(test_single_payload(
+            url,
+            payload,
+            original_domain,
+            test_domain,
+        ));
+    }
+    /// Entry point
+    pub fn process_url(url: String) {
+        let TEST_DOMAIN = "google.com";
+
+        let PAYLOADS = [
+            "//{TEST_DOMAIN}",
+            "//www.{TEST_DOMAIN}",
+            "https://{TEST_DOMAIN}",
+            "https://www.{TEST_DOMAIN}",
+            "//{TEST_DOMAIN}/%2f..",
+            "https://{TEST_DOMAIN}/%2f..",
+            "////{TEST_DOMAIN}",
+            "https:////{TEST_DOMAIN}",
+            "/\\/\\{TEST_DOMAIN}",
+            "/.{TEST_DOMAIN}",
+            "///\\;@{TEST_DOMAIN}",
+            "///{TEST_DOMAIN}@{TEST_DOMAIN}",
+            "///{TEST_DOMAIN}%40{TEST_DOMAIN}",
+            "////{TEST_DOMAIN}//",
+            "/https://{TEST_DOMAIN}",
+            "{TEST_DOMAIN}",
+        ];
+        let mut parsed_original_url: String = String::new();
+        let mut parsed_original_domain: String = String::new();
+
+        if let Ok(parsed) = Url::parse(url.as_str()) {
+            parsed_original_url = parsed.to_string();
+            if let Some(parsed_domain) = Url::parse(url.as_str()).unwrap().domain() {
+                parsed_original_domain = parsed_domain.to_string();
+            }
+        } else {
+            warn!(format!("Invalid url {url}, Quitting..."));
+            return;
+        }
+
+        let vulnerable_urls: Vec<(String, String)> = PAYLOADS
+            .par_iter()
+            .filter_map(|payload| {
+                Some(test_open_redirect_async_wrapper(
+                    url.clone(),
+                    payload.to_string(),
+                    parsed_original_domain.clone(),
+                    TEST_DOMAIN,
+                ))
+            })
+            .collect();
+        for (fullurl, location) in vulnerable_urls {
+            if fullurl.len() != 0 && location.len() != 0 {
+                handle_data!(format!(" -{fullurl}: {location}"), String);
+            }
+        }
+    }
+}
+
+pub mod automoussystemnumber {
+    use crate::save_util;
+    use colored::Colorize;
+    use reqwest::Error;
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    struct RipeData {
+        data: Option<Prefixes>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct Prefixes {
+        prefixes: Vec<Prefix>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct Prefix {
+        prefix: String,
+    }
+    pub async fn get_ip_ranges(asn: String) -> (String, Vec<String>) {
+        let url = format!("https://stat.ripe.net/data/announced-prefixes/data.json?resource={asn}");
+
+        let Session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(10, 0))
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            });
+
+        match Session.get(url).send().await {
+            Ok(response) => match response.json::<RipeData>().await {
+                Ok(parsed_data) => {
+                    if let Some(prefixes_data) = parsed_data.data {
+                        let prefixes = prefixes_data
+                            .prefixes
+                            .into_iter()
+                            .map(|p| p.prefix)
+                            .collect();
+                        (asn.to_string(), prefixes)
+                    } else {
+                        (asn.to_string(), vec![]) // No prefixes found
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Error parsing data for {}: {}", asn, err);
+                    (asn.to_string(), vec![])
+                }
+            },
+            Err(err) => {
+                eprintln!("Error fetching data for {}: {}", asn, err);
+                (asn.to_string(), vec![])
+            }
+        }
+    }
+
+    pub async fn process_asn(asn: String) {
+        info!(format!("Handling asn {asn}"));
+        let (_, results) = get_ip_ranges(asn).await;
+        if results.len() == 0 {
+            println!("No Ip ranges found");
+            return;
+        }
+        println!("IP ranges Found:");
+        for i in &results {
+            println!(" |-{i}");
+            handle_data!(format!(" |-{i}"), String);
+        }
+    }
+}

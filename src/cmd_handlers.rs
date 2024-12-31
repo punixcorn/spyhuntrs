@@ -11,7 +11,7 @@ use std::{io::Read, path::PathBuf};
 use std::env;
 use std::fs;
 
-use crate::{logging, save};
+use crate::{logging, Save};
 
 /// stderr,stdout are strings
 /// status is the status code

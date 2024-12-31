@@ -9,10 +9,10 @@ Everything in **spyhunt** but with a better save feature and written (poorly) in
 - [x] Tests [not Completed]
 - [] better error handling (for requests)
 - [] Documentation
-- [] rename files
+- [x] ~~rename files~~ meh, it works
 - [] better error handling for tests capture
 - [x] Make Readme Image
-- [] Install Script (thinking about just using his .py script and running it)
+- [x] Install Script (thinking about just using his .py script and running it)
 
 # Spyhunt.py Porting List
 
@@ -20,7 +20,7 @@ Everything in **spyhunt** but with a better save feature and written (poorly) in
 
 # Main file
 
-functions in the file [ WORKING 38/52 ]
+functions in the file [ WORKING 45/52 ]
 
 - [x] ~~update~~ won't do it
 - [x] save/s
@@ -42,7 +42,6 @@ functions in the file [ WORKING 38/52 ]
 - [x] redirects
 - [x] brokenlinks
 - [x] tech
-- [] smuggler
 - [x] ip addresses
 - [x] domain info
 - [x] important subdomains
@@ -64,12 +63,16 @@ functions in the file [ WORKING 38/52 ]
 - [x] javascript scan
 - [x] javascript enpoints
 - [x] param miner
-- [] custom headers
-- [] open redirect
-- [] utomoussystemnumber
+- [x] custom headers
+- [x] open redirect
+- [x] automoussystemnumber
 - [x] ~~have i been pwned~~ Non trusted Website
+- [x] ~~auto recon~~ Just gonna do a bunch of funtions
 - [] subdomain takeover
-- [] auto recon
+
+# Add Later Feature
+
+- [] smuggler
 - [] jwt scan
 - [] jwt modify
 - [] s3 scan
