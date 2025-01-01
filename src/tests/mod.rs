@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn webcrawler() {
         save!();
-        let x = spyhunt_util::webcrawler(["en.wikipedia.org"].to_vec());
+        let x = spyhunt_util::webcrawler(["en.wikipedia.org".to_string()].to_vec());
         assert_eq!(Some(()), Some(()));
     }
 
@@ -52,14 +52,14 @@ mod tests {
     #[tokio::test]
     async fn status_code_reqwest() {
         save!();
-        let x = spyhunt_util::status_code_reqwest(data!().as_str()).await;
+        let x = spyhunt_util::status_code::status_code_reqwest(data!()).await;
         assert_eq!(x, Some(()));
     }
 
     #[tokio::test]
     async fn enumerate_domain() {
         save!();
-        let x = spyhunt_util::enumerate_domain(data!().as_str()).await;
+        let x = spyhunt_util::enumerate_domain::enumerate_domain(data!()).await;
         assert_eq!(x, Some(()));
     }
 
