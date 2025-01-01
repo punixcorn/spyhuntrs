@@ -9,6 +9,12 @@
 #![allow(unused_macros)]
 #![allow(unreachable_code)]
 
+use std::{
+    fmt::format,
+    fs::read,
+    time::{self, Instant},
+};
+
 use {
     colored::Colorize,
     rayon::prelude::*,
@@ -28,12 +34,14 @@ use clap::{command, Args};
 use clap::Subcommand;
 
 /// handles the save option state
-pub static Save: Mutex<bool> = Mutex::new(true);
+pub static Save: Mutex<bool> = Mutex::new(false);
 pub static save_file: Mutex<String> = Mutex::new(String::new());
 
 mod logging;
-mod tests;
 // comment for auto formatter to put macros in logging above the others
+mod handle_deps;
+mod tests;
+// comment for auto formatter to put  tests & handle_deps the others
 mod save_util;
 // save to file
 mod banner;
@@ -49,6 +57,12 @@ mod user_agents;
 mod waybackmachine;
 
 use clap::{ArgGroup, Parser};
+use google_search::v1::setup_proxy;
+use spyhunt_util::{
+    brokenlinks, check_cors_misconfig::run_cors_misconfig_tokio, check_host_header_injection, dns,
+    get_favicon_hash, google, ip_addresses, network_analyzer, nuclei_lfi, parse_for_domains, probe,
+    shodan_api, subdomain_finder, xss_scan,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "spyhuntrs")]
@@ -67,54 +81,82 @@ use clap::{ArgGroup, Parser};
 struct opt {
     #[arg(
         long = "save",
+        visible_alias = "sv",
         value_name = "filename.txt",
         help = "Save output to file"
     )]
     save: Option<String>,
 
     #[arg(
+        short = 'w',
         long = "wordlist",
         value_name = "filename.txt",
-        help = "Wordlist to use"
+        help = "Wordlist to use",
+        group = "_wordlist"
     )]
     wordlist: Option<String>,
 
-    #[arg(long = "threads", value_name = "25", help = "Default 25")]
-    threads: Option<String>,
+    // #[arg(long = "threads", value_name = "25", help = "Default 25")]
+    // threads: Option<String>,
+    #[arg(long = "test")]
+    test: Option<String>,
 
-    #[arg(value_name = "domain.com", help = "Scan for subdomains")]
+    #[arg(
+        short = 's',
+        value_name = "domains.txt or domain.com",
+        help = "Scan for subdomains from a file of subdomains of a subdomain"
+    )]
     scan: Option<String>,
 
-    #[arg(long = "tech", value_name = "domain.com", help = "Find technologies")]
+    #[arg(
+        short = 't',
+        long = "tech",
+        value_name = "domains.txt | domain.com",
+        help = "Find technologies"
+    )]
     tech: Option<String>,
 
     #[arg(
+        short = 'd',
         long = "dns",
-        value_name = "domains.txt",
+        value_name = "domains.txt | domain.com",
         help = "Scan a list of domains for DNS records"
     )]
     dns: Option<String>,
 
-    #[arg(long = "probe", value_name = "domains.txt", help = "Probe domains")]
+    #[arg(
+        long = "probe",
+        value_name = "domains.txt | domain.com",
+        help = "Probe domains"
+    )]
     probe: Option<String>,
 
     #[arg(
         long = "redirects",
-        value_name = "domains.txt",
+        value_name = "domains.txt | domain.com",
         help = "Links getting redirected"
     )]
     redirects: Option<String>,
 
     #[arg(
+        long = "open_redirects",
+        visible_alias = "or",
+        value_name = "domains.txt | domain.com",
+        help = "Checks for Open redirect"
+    )]
+    open_redirect: Option<String>,
+
+    #[arg(
         long = "brokenlinks",
-        value_name = "domains.txt",
+        short = 'b',
+        value_name = "domains.txt | domain.com",
         help = "Search for broken links"
     )]
     brokenlinks: Option<String>,
 
     #[arg(
         long = "paramspider",
-        value_name = "domain.com",
+        value_name = "domains.txt | domain.com",
         help = "Extract parameters from a domain"
     )]
     paramspider: Option<String>,
@@ -126,63 +168,70 @@ struct opt {
     )]
     waybackurls: Option<String>,
 
-    #[arg(value_name = "domain.com", help = "Find JavaScript files")]
+    #[arg(
+        long = "javascript",
+        short = 'j',
+        value_name = "domains.txt | domain.com",
+        help = "Find JavaScript files"
+    )]
     javascript: Option<String>,
 
     #[arg(
+        long = "javascript_endpoint",
+        visible_alias = "je",
+        value_name = "domains.txt | domain.com",
+        help = "Find JavaScript endpoints"
+    )]
+    javascript_endpoints: Option<String>,
+
+    #[arg(
         long = "webcrawler",
-        value_name = "https://domain.com",
+        visible_alias = "wc",
+        value_name = "domains.txt | domain.com",
         help = "Scan for URLs and JS files"
     )]
     webcrawler: Option<String>,
 
     #[arg(
         long = "favicon",
+        visible_alias = "fi",
         value_name = "https://domain.com",
         help = "Get favicon hashes"
     )]
     favicon: Option<String>,
 
     #[arg(
-        long = "faviconmulti",
-        value_name = "https://domain.com",
-        help = "Get favicon hashes (multi)"
-    )]
-    faviconmulti: Option<String>,
-
-    #[arg(
         long = "networkanalyzer",
-        value_name = "https://domain.com",
+        value_name = "domains.txt | https://domain.com",
         help = "Net analyzer"
     )]
     networkanalyzer: Option<String>,
 
-    #[arg(long = "reverseip", value_name = "IP", help = "Reverse IP lookup")]
+    #[arg(
+        long = "reverseip",
+        value_name = "ip | ip.txt",
+        help = "Reverse IP lookup"
+    )]
     reverseip: Option<String>,
 
     #[arg(
-        long = "reverseipmulti",
-        value_name = "IP",
-        help = "Reverse IP lookup for multiple IPs"
-    )]
-    reverseipmulti: Option<String>,
-
-    #[arg(
         long = "statuscode",
-        value_name = "domain.com",
+        value_name = "domains.txt | domain.com",
         help = "Get status code"
     )]
     statuscode: Option<String>,
 
     #[arg(
         long = "pathhunt",
-        value_name = "domain.txt",
+        visible_alias = "ph",
+        value_name = "domain.txt | domain.com?id=",
         help = "Check for directory traversal"
     )]
     pathhunt: Option<String>,
 
     #[arg(
         long = "corsmisconfig",
+        visible_alias = "co",
         value_name = "domains.txt",
         help = "Check for CORS misconfiguration"
     )]
@@ -190,8 +239,10 @@ struct opt {
 
     #[arg(
         long = "hostheaderinjection",
+        visible_alias = "hh",
         value_name = "domain.com",
-        help = "Host header injection"
+        help = "Host header injection",
+        requires = "_proxy"
     )]
     hostheaderinjection: Option<String>,
 
@@ -204,7 +255,7 @@ struct opt {
 
     #[arg(
         long = "enumeratedomain",
-        value_name = "domain.com",
+        value_name = "domains.txt | domain.com",
         help = "Enumerate domains"
     )]
     enumeratedomain: Option<String>,
@@ -218,21 +269,21 @@ struct opt {
 
     #[arg(
         long = "ipaddresses",
-        value_name = "domain list",
-        help = "Get IPs from a list of domains"
+        value_name = "domain-list.txt | domain.com",
+        help = "Get IPs from a list of domains or a domain"
     )]
     ipaddresses: Option<String>,
 
     #[arg(
         long = "domaininfo",
-        value_name = "domain list",
+        value_name = "domain-list.txt | domain.com",
         help = "Get domain information"
     )]
     domaininfo: Option<String>,
 
     #[arg(
         long = "importantsubdomains",
-        value_name = "domain list",
+        value_name = "domain-list.txt",
         help = "Extract interesting subdomains"
     )]
     importantsubdomains: Option<String>,
@@ -253,13 +304,26 @@ struct opt {
 
     #[arg(
         long = "api_fuzzer",
-        value_name = "domain.com",
+        value_name = "domain-list.txt | domain.com",
         help = "Look for API endpoints"
     )]
     api_fuzzer: Option<String>,
 
-    #[arg(long = "shodan", value_name = "domain.com", help = "Recon with Shodan")]
+    #[arg(
+        long = "shodan",
+        value_name = "domain.com",
+        help = "Recon with Shodan",
+        requires = "_shodanapi"
+    )]
     shodan: Option<String>,
+
+    #[arg(
+        long = "shodanapi",
+        value_name = "API-KEY",
+        help = "Add Shodan api key",
+        group = "_shodanapi"
+    )]
+    shodanapi: Option<String>,
 
     #[arg(
         long = "forbiddenpass",
@@ -270,19 +334,26 @@ struct opt {
 
     #[arg(
         long = "directorybrute",
-        value_name = "domain.com",
-        help = "Brute force directories"
+        value_name = "domain-list.txt | domain.com",
+        help = "Brute force directories",
+        requires = "_wordlist"
     )]
     directorybrute: Option<String>,
 
     #[arg(
         long = "cidr_notation",
         value_name = "IP/24",
-        help = "Scan an IP range"
+        help = "Scan an IP range",
+        requires = "_port"
     )]
     cidr_notation: Option<String>,
 
-    #[arg(long = "ports", value_name = "80,443,8443", help = "Ports to scan")]
+    #[arg(
+        long = "ports",
+        value_name = "80,443,8443 | ALL ",
+        help = "Ports to scan",
+        group = "_port"
+    )]
     ports: Option<String>,
 
     #[arg(long = "print_all_ips", value_name = "IP/24", help = "Print all IPs")]
@@ -290,14 +361,16 @@ struct opt {
 
     #[arg(
         long = "xss_scan",
-        value_name = "URL",
+        visible_alias = "xss",
+        value_name = "domains.txt | domain.com?id=1",
         help = "Scan for XSS vulnerabilities"
     )]
     xss_scan: Option<String>,
 
     #[arg(
         long = "sqli_scan",
-        value_name = "URL",
+        visible_alias = "sqli",
+        value_name = "domains.txt | domain.com?id=1",
         help = "Scan for SQLi vulnerabilities"
     )]
     sqli_scan: Option<String>,
@@ -305,114 +378,59 @@ struct opt {
     #[arg(long = "s3-scan", help = "Scan for exposed S3 buckets")]
     s3_scan: bool,
 
-    #[arg(long = "verbose", help = "Increase output verbosity")]
-    verbose: bool,
+    // #[arg(long = "verbose", help = "Increase output verbosity")]
+    // verbose: bool,
+    //
+    // #[arg(
+    //     long = "concurrency",
+    //     default_value_t = 10,
+    //     help = "Maximum number of concurrent requests"
+    // )]
+    // concurrency: usize,
+    #[arg(long = "nuclei_lfi", help = "Find Local File Inclusion with nuclei", action = clap::ArgAction::Count)]
+    nuclei_lfi: u8,
 
     #[arg(
-        long = "concurrency",
-        default_value_t = 10,
-        help = "Maximum number of concurrent requests"
+        long = "google",
+        value_name = "query | domain.com",
+        help = "Perform Google Search on a query and get relevant data"
     )]
-    concurrency: usize,
+    google: Option<String>,
 
-    #[arg(long = "nuclei_lfi", help = "Find Local File Inclusion with nuclei")]
-    nuclei_lfi: bool,
+    #[arg(long = "update", help = "install dependices" , action = clap::ArgAction::Count)]
+    install: u8,
 
-    #[arg(long = "google", help = "Perform Google Search")]
-    google: bool,
-
-    #[arg(long = "update", help = "Update the script")]
-    update: bool,
-
-    #[arg(long = "proxy", value_name = "URL", help = "Use a proxy")]
+    #[arg(
+        long = "proxy",
+        value_name = "URL",
+        help = "Use a proxy",
+        group = "_proxy"
+    )]
     proxy: Option<String>,
 
     #[arg(
         long = "proxy-file",
         value_name = "file.txt",
-        help = "Load proxies from a file"
+        help = "Load proxies from a file",
+        group = "_proxy"
     )]
     proxy_file: Option<String>,
-
-    #[arg(
-        long = "output-dir",
-        default_value = ".",
-        help = "Specify output directory"
-    )]
-    output_dir: String,
+    // #[arg(
+    //     long = "output-dir",
+    //     default_value = ".",
+    //     help = "Specify output directory"
+    // )]
+    // output_dir: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    banner::print_simple_banner();
-
-    /*
-        let target: String = "en.wikipedia.org".to_string();
-        let domain: String = target.clone();
-        let domains = ["google.com", "food.com", "en.wikipedia.com"];
-        if check_if_save() {
-            set_save_file("newfile.txt");
-        }
-        let agent = user_agents::get_user_agent(true, false).await;
-        assert!(agent.len() != 0);
-        pathhunt::scan_target(&target).await.unwrap();
-        pathhunt::scan_params(&target).await.unwrap();
-        waybackmachine::get_wayback_snapshot(target.clone()).await;
-        waybackmachine::waybackmachine_scan(target.clone())
-            .await
-            .unwrap();
-        save_util::set_save_option(true);
-        spyhunt_util::webcrawler(domains.to_vec());
-        spyhunt_util::status_code(target.clone().as_str());
-
-
-        let api_key: String = "XBB0IcjOcI5dAZ1ZwAXSr4U5ChL8HAk8".to_string();
-        spyhunt_util::shodan_api(api_key, "spankki.fi".to_string(), false).await;
-        spyhunt_util::status_code(target.as_str());
-        spyhunt_util::run_cors_misconfig_threads([target.as_str()].to_vec()).await;
-        spyhunt_util::run_cors_misconfig_threads(domains.to_vec()).await;
-        let x = favicon::init();
-        println!("{:#?}", x);
-        spyhunt_util::probe(domain.clone());
-        spyhunt_util::network_analyzer(target.clone());
-        spyhunt_util::redirects(target.clone());
-        spyhunt_util::brokenlinks(target.clone());
-        spyhunt_util::tech::find_tech("en.wikipedia.com".to_string()).await;
-        spyhunt_util::paramspider(domain.clone());
-        spyhunt_util::get_reverse_ip(["8.8.8.8"].to_vec());
-        spyhunt_util::google(domain.clone()).await;
-        match google_search::v2::user_agent::search("en.wikipedia.com".to_string(), 10).await {
-            Ok(data) => data.into_iter().for_each(|x| {
-                println!("{:#?}", x);
-            }),
-            Err(_) => {}
-        };
-
-        println!("no user agent:");
-        match google_search::v2::no_user_agent::search("en.wikipedia.com".to_string(), 10).await {
-            Ok(data) => data.into_iter().for_each(|x| {
-                println!("{:#?}", x);
-            }),
-            Err(_) => {}
-        };
-        spyhunt_util::cidr_notation::cidr_notation("127.0.0.1");
-        spyhunt_util::print_all_ips("127.0.0.1").unwrap();
-        match spyhunt_util::get_favicon_hash("https://www.skype.com/en/".to_string()).await {
-            Some(k) => println!("{:#?}", k),
-            None => (),
-        };
-        spyhunt_util::status_code_reqwest(target.as_str()).await;
-        spyhunt_util::enumerate_domain("en.wikipedia.org")
-            .await
-            .unwrap();
-        spyhunt_util::enumerate_domain("https://en.wikipedia.org")
-            .await
-            .unwrap();
-
-        install::install();
-    */
-
+    banner::print_banner();
+    let mut wordlist: String = String::new();
+    let mut proxies: String = String::new();
+    let mut is_proxy_file: bool = false;
     if env::args().count() <= 1 {
+        warn!("No options passed\ntry --help for more information");
         exit(1);
     } else {
         let args = opt::parse();
@@ -422,248 +440,501 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 save_util::set_save_file(&filename);
                 save_util::set_save_option(true);
             }
-            None => {
-                err!("no file name passed");
-            }
+            None => {}
         }
-
-        match args.nmap {
-            Some(ip) => {}
+        match args.wordlist {
+            Some(filename) => {
+                info!(format!("Using wordlist: {}", filename));
+                wordlist = filename;
+            }
             None => {}
         }
 
-        match args.wordlist {
-            Some(filename) => {
-                println!("Using wordlist: {}", filename);
+        match args.proxy {
+            Some(prox) => {
+                proxies = prox;
+                is_proxy_file = false;
             }
-            None => {
-                err!("No wordlist provided.");
-            }
+            None => {}
         }
 
-        match args.threads {
-            Some(threads) => {
-                println!("Threads set to: {}", threads);
+        match args.proxy_file {
+            Some(prox) => {
+                proxies = prox;
+                is_proxy_file = true;
             }
-            None => {
-                println!("Using default threads.");
+            None => {}
+        }
+
+        match args.nmap {
+            Some(domain) => {
+                spyhunt_util::nmap(domain);
             }
+            None => {}
         }
 
         match args.scan {
-            Some(domain) => {
-                println!("Scanning subdomains for: {}", domain);
+            Some(target) => {
+                let domains = parse_for_domains(target);
+                info!(format!("Scanning subdomains"));
+                subdomain_finder(domains).await;
             }
             None => {
-                println!("No domain provided for subdomain scan.");
+                println!("No domain or file provided for subdomain scan.");
             }
         }
 
         match args.tech {
             Some(domain) => {
-                println!("Finding technologies on: {}", domain);
+                let domains = parse_for_domains(domain.clone());
+                info!(format!("Finding technologies on: {}", domain));
+                spyhunt_util::tech::find_tech_main(domains);
             }
-            None => {
-                println!("No domain provided for technology scan.");
-            }
+            None => {}
         }
 
         match args.dns {
-            Some(file) => {
-                println!("Scanning DNS records from file: {}", file);
+            Some(file_or_domain) => {
+                info!(format!("Scanning DNS records from {}", file_or_domain));
+                let domains = parse_for_domains(file_or_domain);
+                for i in domains {
+                    dns(i);
+                }
             }
-            None => {
-                println!("No file provided for DNS scan.");
-            }
+            None => {}
         }
 
         match args.probe {
-            Some(file) => {
-                println!("Probing domains in file: {}", file);
+            Some(file_or_domain) => {
+                let domains = parse_for_domains(file_or_domain.clone());
+                info!(format!("Probing domains in file: {}", file_or_domain));
+                for domain in domains {
+                    probe(domain);
+                }
             }
-            None => {
-                println!("No file provided for probing domains.");
-            }
+            None => {}
         }
 
         match args.redirects {
-            Some(file) => {
-                println!("Checking redirects for domains in: {}", file);
+            Some(file_or_domain) => {
+                let domains = parse_for_domains(file_or_domain.clone());
+                info!(format!("Probing domains in file: {}", file_or_domain));
+                for domain in domains {
+                    spyhunt_util::redirects(domain);
+                }
             }
-            None => {
-                println!("No file provided for checking redirects.");
+            None => {}
+        }
+
+        match args.open_redirect {
+            Some(file_or_domain) => {
+                info!(format!(
+                    "Scanning domains for open redirect: {}",
+                    file_or_domain
+                ));
+                for url in parse_for_domains(file_or_domain) {
+                    spyhunt_util::open_redirect::process_url(url);
+                }
             }
+            None => {}
         }
 
         match args.brokenlinks {
-            Some(file) => {
-                println!("Searching for broken links in: {}", file);
+            Some(file_or_domain) => {
+                info!(format!(
+                    "Searching for broken links in: {}",
+                    file_or_domain.clone()
+                ));
+                let domains = parse_for_domains(file_or_domain);
+
+                for domain in domains {
+                    brokenlinks(domain);
+                }
             }
-            None => {
-                println!("No file provided for broken links scan.");
-            }
+            None => {}
         }
 
         match args.paramspider {
-            Some(domain) => {
-                println!("Extracting parameters from: {}", domain);
+            Some(file_or_domain) => {
+                info!(format!("Extracting parameters from: {}", file_or_domain));
+                for domain in parse_for_domains(file_or_domain) {
+                    spyhunt_util::paramspider(domain);
+                }
             }
-            None => {
-                println!("No domain provided for parameter spidering.");
-            }
+            None => {}
         }
 
         match args.waybackurls {
             Some(url) => {
-                println!("Scanning Wayback URLs for: {}", url);
+                info!(format!("Scanning Wayback URLs for: {}", url));
+                spyhunt_util::wayback_urls(url.clone());
             }
-            None => {
-                println!("No URL provided for Wayback scan.");
-            }
+            None => {}
         }
 
         match args.javascript {
-            Some(domain) => {
-                println!("Finding JavaScript files on: {}", domain);
+            Some(file_or_domain) => {
+                info!(format!("Finding JavaScript files on: {}", file_or_domain));
+                let domains = parse_for_domains(file_or_domain);
+                spyhunt_util::javascript::crawl_website(domains);
             }
-            None => {
-                println!("No domain provided for JavaScript scan.");
+            None => {}
+        }
+        match args.javascript_endpoints {
+            Some(file_or_domain) => {
+                info!(format!("Finding JavaScript endpoints..."));
+                let domains = parse_for_domains(file_or_domain);
+                spyhunt_util::javascript_endpoints::process_js_files(domains).await;
             }
+            None => {}
         }
 
         match args.webcrawler {
-            Some(url) => {
-                println!("Crawling URLs and JS files on: {}", url);
+            Some(file_or_domain) => {
+                info!(format!("Crawling URLs and JS files on: {}", file_or_domain));
+                let domains = parse_for_domains(file_or_domain);
+                spyhunt_util::webcrawler(domains);
             }
-            None => {
-                println!("No URL provided for web crawling.");
-            }
+            None => {}
         }
 
         match args.favicon {
             Some(url) => {
-                println!("Getting favicon hash for: {}", url);
+                info!(format!("Getting favicon hash for: {}", url));
+                get_favicon_hash(url).await;
             }
-            None => {
-                println!("No URL provided for favicon hash.");
-            }
-        }
-
-        match args.faviconmulti {
-            Some(url) => {
-                println!("Getting favicon hashes (multi) for: {}", url);
-            }
-            None => {
-                println!("No URL provided for favicon multi scan.");
-            }
+            None => {}
         }
 
         match args.networkanalyzer {
-            Some(url) => {
-                println!("Performing network analysis on: {}", url);
+            Some(file_or_domain) => {
+                info!(format!(
+                    "Performing network analysis on: {}",
+                    file_or_domain
+                ));
+                for domain in parse_for_domains(file_or_domain) {
+                    network_analyzer(domain);
+                }
             }
-            None => {
-                println!("No URL provided for network analysis.");
-            }
+            None => {}
         }
 
         match args.reverseip {
-            Some(ip) => {
-                println!("Performing reverse IP lookup for: {}", ip);
+            Some(file_or_domain) => {
+                info!(format!(
+                    "Performing reverse IP lookup for: {}",
+                    file_or_domain
+                ));
+                let domains = parse_for_domains(file_or_domain);
+                ip_addresses(domains);
             }
-            None => {
-                println!("No IP provided for reverse lookup.");
-            }
-        }
-
-        match args.reverseipmulti {
-            Some(ip) => {
-                println!("Performing reverse IP lookup (multi) for: {}", ip);
-            }
-            None => {
-                println!("No IP provided for reverse multi lookup.");
-            }
+            None => {}
         }
 
         match args.statuscode {
-            Some(domain) => {
-                println!("Getting status code for: {}", domain);
+            Some(file_or_domain) => {
+                info!(format!("Getting status code for: {}", file_or_domain));
+                let domains = parse_for_domains(file_or_domain);
+                spyhunt_util::status_code::run_status_code_tokio(domains).await;
             }
-            None => {
-                println!("No domain provided for status code.");
-            }
+            None => {}
         }
 
         match args.pathhunt {
-            Some(file) => {
-                println!("Checking directory traversal in: {}", file);
+            Some(file_or_domain) => {
+                info!(format!(
+                    "Checking directory traversal in: {}",
+                    file_or_domain
+                ));
+                let domains = parse_for_domains(file_or_domain);
+                pathhunt::scan_target_tokio(domains).await;
             }
-            None => {
-                println!("No file provided for directory traversal check.");
-            }
+            None => {}
         }
 
         match args.corsmisconfig {
-            Some(file) => {
-                println!("Checking for CORS misconfiguration in: {}", file);
+            Some(file_or_domain) => {
+                info!(format!(
+                    "Checking for CORS misconfiguration in: {}",
+                    file_or_domain.clone()
+                ));
+                let domains = parse_for_domains(file_or_domain);
+                run_cors_misconfig_tokio(domains).await;
             }
-            None => {
-                println!("No file provided for CORS misconfiguration.");
-            }
+            None => {}
         }
 
         match args.hostheaderinjection {
             Some(domain) => {
-                println!("Performing host header injection on: {}", domain);
+                info!(format!("Performing host header injection on: {}", domain));
+                check_host_header_injection(domain, proxies, is_proxy_file).await;
             }
-            None => {
-                println!("No domain provided for host header injection.");
-            }
+            None => {}
         }
 
         match args.securityheaders {
             Some(domain) => {
-                println!("Scanning security headers for: {}", domain);
+                info!(format!("Scanning security headers for: {}", domain));
+                spyhunt_util::check_security_headers(domain).await;
             }
-            None => {
-                println!("No domain provided for security headers scan.");
-            }
+            None => {}
         }
 
         match args.enumeratedomain {
-            Some(domain) => {
-                println!("Enumerating domains for: {}", domain);
+            Some(file_or_domain) => {
+                info!(format!("Enumerating domains for: {}", file_or_domain));
+                let domains = parse_for_domains(file_or_domain);
+
+                spyhunt_util::enumerate_domain::enumerate_domain_tokio(domains).await;
             }
-            None => {
-                println!("No domain provided for enumeration.");
-            }
+            None => {}
         }
 
         match args.smuggler {
             Some(domain) => {
-                println!("Checking for HTTP smuggling on: {}", domain);
+                info!(format!("No Checking for HTTP smuggling on: {}", domain));
+                warn!("NOT IMPLEMENTED");
             }
-            None => {
-                println!("No domain provided for smuggling check.");
-            }
+            None => {}
         }
 
         match args.ipaddresses {
-            Some(file) => {
-                println!("Extracting IPs from file: {}", file);
+            Some(file_or_domain) => {
+                info!(format!("Extracting IPs from file: {}", file_or_domain));
+                let domains = parse_for_domains(file_or_domain.clone());
+                ip_addresses(domains);
             }
-            None => {
-                println!("No file provided for IP extraction.");
-            }
+            None => {}
         }
 
         match args.domaininfo {
+            Some(file_or_domain) => {
+                info!(format!("Getting domain info from file: {}", file_or_domain));
+                let domains = parse_for_domains(file_or_domain);
+                spyhunt_util::domain_info(domains).await;
+            }
+            None => {}
+        }
+
+        match args.importantsubdomains {
             Some(file) => {
-                println!("Getting domain info from file: {}", file);
+                info!(format!("Extracting important domains..."));
+                spyhunt_util::importantsubdomains(file);
             }
-            None => {
-                println!("No file provided for domain info.");
+            None => {}
+        }
+        match args.not_found {
+            Some(file) => {
+                info!(format!("Looking for Dead endpoints..."));
+                spyhunt_util::find_not_found(file).await;
             }
+            None => {}
+        }
+        match args.api_fuzzer {
+            Some(file_or_domain) => {
+                info!(format!("Look for Api Endpoints"));
+                let domains = parse_for_domains(file_or_domain);
+                spyhunt_util::api_fuzzer::api_fuzzer_tokio(domains).await;
+            }
+            None => {}
+        }
+        let mut shodan_api_key = String::new();
+        match args.shodanapi {
+            Some(api) => {
+                shodan_api_key = api;
+            }
+            None => {}
+        }
+        match args.shodan {
+            Some(file_or_domain) => {
+                info!(format!("Finding subdomains through shodan"));
+                if shodan_api_key.len() == 0 {
+                    warn!("No api key passed use --shodanapi");
+                } else {
+                    let domains = parse_for_domains(file_or_domain);
+                    for domain in domains {
+                        shodan_api(shodan_api_key.clone(), domain, false).await;
+                    }
+                }
+            }
+            None => {}
+        }
+
+        match args.forbiddenpass {
+            Some(domain) => {
+                info!(format!("Attempting bypass on  {domain}"));
+                spyhunt_util::forbiddenpass::forbiddenpass(domain).await;
+            }
+            None => {}
+        }
+
+        match args.directorybrute {
+            Some(file_or_domain) => {
+                info!(format!("Attempting bypass on  {file_or_domain}"));
+                let domains = parse_for_domains(file_or_domain);
+                spyhunt_util::run_directory_brute_threads(domains, wordlist, Vec::new());
+            }
+            None => {}
+        }
+
+        // match args.cidr_notation {
+        //     Some(Ip) => {
+        //         info!(format!("Scanning for Ip's and ports on  network {Ip}"));
+        //         spyhunt_util::cidr_notation::cidr_notation(Ip.as_str());
+        //     }
+        //     None => {}
+        // }
+
+        match args.cidr_notation {
+            Some(Ip) => {
+                let mut Ports: Vec<u16> = Vec::new();
+                let mut trip_all: bool = false;
+
+                match args.ports {
+                    Some(_ports) => {
+                        if _ports.to_lowercase() == "all" {
+                            trip_all = true;
+                        } else {
+                            let _vec: Vec<_> = _ports.split(',').collect();
+                            for i in _vec {
+                                Ports.push(i.parse::<u16>().unwrap());
+                            }
+                        }
+                    }
+                    None => {
+                        err!("Could not Parse Ports:\nUse Example: --port 12,23,80  | --port all");
+                    }
+                }
+
+                info!(format!(
+                    "Scanning for Ip's and ports on  network {}",
+                    Ip.clone()
+                ));
+                if trip_all && Ports.is_empty() {
+                    spyhunt_util::cidr_notation::cidr_notation(Ip.clone(), None);
+                } else {
+                    spyhunt_util::cidr_notation::cidr_notation(Ip.clone(), Some(Ports));
+                }
+            }
+            None => {}
+        }
+
+        match args.print_all_ips {
+            Some(Ip) => {
+                info!(format!("Getting all ip from {}", Ip.clone()));
+                spyhunt_util::print_all_ips(Ip.as_str());
+            }
+            None => {}
+        }
+
+        match args.xss_scan {
+            Some(file_or_domain) => {
+                info!(format!("Running XSS scan on {}", file_or_domain.clone()));
+                let domains = parse_for_domains(file_or_domain);
+                spyhunt_util::xss_scan::xxs_scanner(domains);
+            }
+            None => {}
+        }
+        match args.sqli_scan {
+            Some(file_or_domain) => {
+                info!(format!("Running SQLi scan on {}", file_or_domain.clone()));
+                let domains = parse_for_domains(file_or_domain);
+                spyhunt_util::sqli_scan::sqli_scanner(domains);
+            }
+            None => {}
+        }
+
+        match args.nuclei_lfi {
+            0 => {}
+            _ => {
+                info!("Starting Nuclei....");
+                nuclei_lfi();
+            }
+        }
+
+        match args.google {
+            Some(query) => {
+                info!(format!("Running Google search on {}....", query.clone()));
+                google(query).await;
+            }
+            None => {}
+        }
+        match args.install {
+            0 => {}
+            _ => {
+                warn!(format!("EXPERIMENTAL DON'T"));
+                install::install();
+            }
+        }
+
+        match args.test {
+            Some(x) => {
+                let mut finish = std::time::Duration::from_secs(0);
+                let domains: Vec<String> = vec![
+                    "google.com".to_string(),
+                    "youtube.com".to_string(),
+                    "facebook.com".to_string(),
+                    "instagram.com".to_string(),
+                    "whatsapp.com".to_string(),
+                    "x.com".to_string(),
+                    "wikipedia.org".to_string(),
+                    "chatgpt.com".to_string(),
+                    "reddit.com".to_string(),
+                    "yahoo.com".to_string(),
+                    "yahoo.co.jp".to_string(),
+                    "amazon.com".to_string(),
+                    "yandex.ru".to_string(),
+                    "baidu.com".to_string(),
+                    "tiktok.com".to_string(),
+                    "netflix.com".to_string(),
+                    "microsoftonline.com".to_string(),
+                    "bing.com".to_string(),
+                    "pornhub.com".to_string(),
+                    "linkedin.com".to_string(),
+                    "live.com".to_string(),
+                    "naver.com".to_string(),
+                    "dzen.ru".to_string(),
+                    "office.com".to_string(),
+                    "microsoft.com".to_string(),
+                    "xvideos.com".to_string(),
+                    "pinterest.com".to_string(),
+                    "bilibili.com".to_string(),
+                    "twitch.tv".to_string(),
+                    "vk.com".to_string(),
+                    "news.yahoo.co.jp".to_string(),
+                    "xhamster.com".to_string(),
+                    "mail.ru".to_string(),
+                    "sharepoint.com".to_string(),
+                    "samsung.com".to_string(),
+                    "fandom.com".to_string(),
+                    "globo.com".to_string(),
+                    "canva.com".to_string(),
+                    "xnxx.com".to_string(),
+                    "duckduckgo.com".to_string(),
+                    "t.me".to_string(),
+                    "weather.com".to_string(),
+                    "quora.com".to_string(),
+                    "temu.com".to_string(),
+                    "cnn.com".to_string(),
+                    "zoom.us".to_string(),
+                    "stripchat.com".to_string(),
+                    "ebay.com".to_string(),
+                ];
+                let domains2: Vec<String> = domains.clone();
+                println!("[TEST] {}", "RUNNING TOKIO::SPAWN".yellow());
+                let mut start = Instant::now();
+                spyhunt_util::status_code::run_status_code_tokio(domains).await;
+                finish = start.elapsed();
+                println!("TIME : {}", finish.as_secs_f64());
+                println!("[TEST] {}", "RUNNING RAYON".yellow());
+                start = Instant::now();
+                spyhunt_util::status_code::rayon_status_code(domains2);
+                finish = start.elapsed();
+                println!("TIME : {}", finish.as_secs_f64());
+                println!("{}", "TESTS DONE, goodbye...".green());
+                exit(0);
+            }
+            None => {}
         }
     }
 

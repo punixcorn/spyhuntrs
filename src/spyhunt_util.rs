@@ -19,16 +19,19 @@
  * I should fix that to be more uniform?
  */
 
+use futures::future;
+
 use crate::{
     cmd_handlers::{self, cmd_info, run_cmd, run_cmd_string, run_piped_strings},
     file_util::{file_exists, read_from_file},
     google_search::{self},
-    request, save_util,
+    handle_deps, request, save_util,
     user_agents::get_user_agent_prexisting,
 };
 
 // above all
 use {
+    crate::file_util,
     base64::{
         alphabet,
         engine::{self, general_purpose},
@@ -63,6 +66,33 @@ use {
         sync::{Arc, Mutex},
     },
 };
+
+/// take a target string
+/// and return a domain if the target isn't a file
+/// or doesn't contain domains
+pub fn parse_for_domains(file_or_domain: String) -> Vec<String> {
+    let mut domains: Vec<String> = vec![];
+    if file_util::file_exists(&file_or_domain) {
+        match file_util::read_from_file(file_or_domain.clone()) {
+            Ok(res) => {
+                res.into_iter().for_each(|d| {
+                    domains.push(d);
+                });
+            }
+            Err(..) => {
+                warn!(format!(
+                    "file {} exits but failed to read, Treating it as a domain...",
+                    file_or_domain.clone()
+                ));
+                domains = vec![file_or_domain];
+            }
+        };
+    } else {
+        domains = vec![file_or_domain];
+    }
+
+    return domains;
+}
 
 /// get the domain name for the ip [ip] [Completed]
 /// # Example
@@ -132,10 +162,18 @@ pub async fn shodan_api(api_key: String, domain: String, extract_domain_only: bo
     }
 }
 
-/// find subdomains in a domain [completed]
-pub async fn subdomain_finder(domain: Vec<&str>) -> Option<()> {
-    let certsh_path = " ./scripts/certsh.sh".to_string();
-    let spotter_path = "./scripts/spotter.sh".to_string();
+// pub async fn shodan_api_tokio(api_key: String, domains: Vec<String>) {
+//     domains.into_iter().map(|domain| async move {
+//         let api = api_key.clone();
+//         shodan_api(api, domain, false).await;
+//     });
+// }
+
+/// find subdomains in a domain from [completed]
+pub async fn subdomain_finder(domain: Vec<String>) -> Option<()> {
+    let deps_path = handle_deps::check_or_clone_spyhuntrs_deps();
+    let certsh_path = format!("{deps_path}/scripts/certsh.sh");
+    let spotter_path = format!("{deps_path}/scripts/spotter.sh");
 
     if !file_exists(&certsh_path) || !file_exists(&spotter_path) {
         err!(format!(
@@ -165,7 +203,7 @@ pub async fn subdomain_finder(domain: Vec<&str>) -> Option<()> {
     // closure to run scripts
     let run_scripts = |str1: String| {
         for d in &domain {
-            match cmd_handlers::run_piped_strings(str1.clone(), "uniq".to_string()) {
+            match cmd_handlers::run_piped_strings(format!("{str1} {d}"), "uniq".to_string()) {
                 Some(data) => {
                     match data.stdout {
                         Some(x) => {
@@ -183,14 +221,14 @@ pub async fn subdomain_finder(domain: Vec<&str>) -> Option<()> {
     };
 
     // run spotter
-    run_scripts(spotter_path);
+    run_scripts(format!("bash {spotter_path}"));
     // run certsh
-    run_scripts(certsh_path);
+    run_scripts(format!("bash {certsh_path}"));
     Some(())
 }
 
 /// perform a webcrawl using hakrawler [completed]
-pub fn webcrawler(domain: Vec<&str>) -> Option<()> {
+pub fn webcrawler(domain: Vec<String>) -> Option<()> {
     for d in domain {
         let cmd = cmd_handlers::run_piped_strings(format!("echo {}", d), format!("hakrawler"));
         match cmd {
@@ -264,95 +302,144 @@ pub fn status_code(domain: &str) -> Option<()> {
 }
 
 /// get status code of domain using reqwest [completed]
-pub async fn status_code_reqwest(domain: &str) -> Option<()> {
-    let d = domain.trim().replace("https://", "").replace("http://", "");
-    let mut code: u16 = 0;
-    let resp = fetch_url!(domain.to_string());
-    match resp {
-        Ok(data) => {
-            info!(format!("{d} [{}]", data.status().as_u16()));
-            handle_data!(format!("{d} [{}]", data.status().as_u16()), String);
-        }
-        Err(_) => {
-            warn!(format!("{d} [no infomation]"));
-            return None;
-        }
-    };
-    Some(())
+pub mod status_code {
+    use crate::{request, save_util};
+    use colored::Colorize;
+    use futures::{future, SinkExt};
+    use rayon::prelude::*;
+    use reqwest;
+
+    use super::status_code;
+
+    /// get status code of domain using reqwest [completed]
+    pub async fn status_code_reqwest(domain: String) -> Option<()> {
+        let d = domain.trim().replace("https://", "").replace("http://", "");
+        let mut code: u16 = 0;
+        let resp = fetch_url!(domain.to_string());
+        match resp {
+            Ok(data) => {
+                info!(format!("{d} [{}]", data.status().as_u16()));
+                handle_data!(format!("{d} [{}]", data.status().as_u16()), String);
+            }
+            Err(_) => {
+                warn!(format!("{d} [no infomation]"));
+                return None;
+            }
+        };
+        Some(())
+    }
+
+    pub async fn run_status_code_tokio(domains: Vec<String>) {
+        let tasks = domains.clone().into_iter().map(|domain| {
+            tokio::spawn(async move {
+                status_code_reqwest(domain.clone()).await;
+            })
+        });
+
+        future::join_all(tasks).await;
+    }
+
+    pub fn rayon_status_code_wrapper(domain: String) -> Option<()> {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(status_code_reqwest(domain))
+    }
+
+    pub fn rayon_status_code(domains: Vec<String>) {
+        domains.par_iter().for_each(|domain| {
+            rayon_status_code_wrapper(domain.to_string());
+        })
+    }
 }
 
-/// enumate domain for server info and ip [completed]
-pub async fn enumerate_domain(domain: &str) -> Option<()> {
-    let mut server: &str = "unknown";
+pub mod enumerate_domain {
+    use crate::{request, save_util};
+    use colored::Colorize;
+    use futures::future;
+    use reqwest::{self, Client, Response};
 
-    let mut resp: Response;
-    match fetch_url!(domain.to_string()) {
-        Ok(r) => resp = r,
-        Err(err) => {
-            warn!(format!("Err : {err}"));
-            return None;
-        }
-    };
+    /// enumate domain for server info and ip [completed]
+    pub async fn enumerate_domain(domain: String) -> Option<()> {
+        let mut server: &str = "unknown";
 
-    let mut domain_ip: String = String::new();
-
-    match dns_lookup::lookup_host(
-        domain
-            .trim()
-            .replace("https://", "")
-            .replace("http://", "")
-            .as_str(),
-    ) {
-        Ok(ips) => {
-            match Some(ips) {
-                Some(ip) => {
-                    match ip.get(0) {
-                        Some(v4) => {
-                            domain_ip = v4.to_string();
-                        }
-                        _ => {
-                            warn!(format!(
-                                "could not parse data gotten from lookup for {}",
-                                domain
-                            ));
-                            return None;
-                        }
-                    };
-                }
-                _ => {
-                    warn!(format!("no ip gotten for {}", domain));
-                }
-            };
-        }
-        _ => (),
-    };
-
-    if domain_ip.is_empty() {
-        domain_ip = "Could not resolve ip".to_string();
-    }
-
-    if resp.status().is_success()
-        || resp.status().is_redirection()
-        || resp.status().is_informational()
-    {
-        let d = domain.trim().replace("https://", "").replace("http://", "");
-        let headers = resp.headers();
-        for (key, value) in headers.iter() {
-            if key == "Server" || key == "server" {
-                server = value.to_str().unwrap_or_else(|err| {
-                    warn!(format!("err occured : {}", err.to_string()));
-                    "ERR"
-                });
+        let mut resp: Response;
+        match fetch_url!(domain.to_string()) {
+            Ok(r) => resp = r,
+            Err(err) => {
+                warn!(format!("Err : {err}"));
+                return None;
             }
+        };
+
+        let mut domain_ip: String = String::new();
+
+        match dns_lookup::lookup_host(
+            domain
+                .trim()
+                .replace("https://", "")
+                .replace("http://", "")
+                .as_str(),
+        ) {
+            Ok(ips) => {
+                match Some(ips) {
+                    Some(ip) => {
+                        match ip.get(0) {
+                            Some(v4) => {
+                                domain_ip = v4.to_string();
+                            }
+                            _ => {
+                                warn!(format!(
+                                    "could not parse data gotten from lookup for {}",
+                                    domain
+                                ));
+                                return None;
+                            }
+                        };
+                    }
+                    _ => {
+                        warn!(format!("no ip gotten for {}", domain));
+                    }
+                };
+            }
+            _ => (),
+        };
+
+        if domain_ip.is_empty() {
+            domain_ip = "Could not resolve ip".to_string();
         }
 
-        let data = format!("{d} [{domain_ip}] : [{server}]");
-        info!(data);
-        handle_data!(data, String);
-        return Some(());
+        if resp.status().is_success()
+            || resp.status().is_redirection()
+            || resp.status().is_informational()
+        {
+            let d = domain.trim().replace("https://", "").replace("http://", "");
+            let headers = resp.headers();
+            for (key, value) in headers.iter() {
+                if key == "Server" || key == "server" {
+                    server = value.to_str().unwrap_or_else(|err| {
+                        warn!(format!("err occured : {}", err.to_string()));
+                        "ERR"
+                    });
+                }
+            }
+
+            let data = format!("{d} [{domain_ip}] : [{server}]");
+            info!(data);
+            handle_data!(data, String);
+            return Some(());
+        }
+
+        return None;
     }
 
-    return None;
+    pub async fn enumerate_domain_tokio(domains: Vec<String>) {
+        let tasks = domains.into_iter().map(|domain| {
+            tokio::spawn(async move {
+                enumerate_domain(domain).await;
+            })
+        });
+
+        future::join_all(tasks).await;
+    }
 }
 
 /// get the favicon hash for a domain [completed]
@@ -388,6 +475,7 @@ pub mod check_cors_misconfig {
     use {
         crate::{request, save_util},
         colored::Colorize,
+        futures::future,
         rayon::prelude::*,
         reqwest::{self},
         std::time::Duration,
@@ -399,7 +487,7 @@ pub mod check_cors_misconfig {
     /// ```
     /// # panic
     /// will panic if its unable to create a client
-    pub fn check_cors_misconfig(domain: &str) -> () {
+    pub fn check_cors_misconfig(domain: String) -> () {
         let payload = format!("{domain}, evil.com");
 
         let client = reqwest::blocking::Client::builder()
@@ -463,15 +551,25 @@ pub mod check_cors_misconfig {
     }
 
     /// checks for cors misconfiguration in parallel using rayon [completed]
-    pub async fn run_cors_misconfig_threads(domains: Vec<&str>) -> () {
-        domains.par_iter().for_each(|&domain| {
+    pub fn run_cors_misconfig_threads(domains: Vec<String>) -> () {
+        domains.par_iter().for_each(|domain| {
             {
                 info!(format!("Checking CORS for {}", domain));
                 //std::thread::sleep(std::time::Duration::from_secs(1));
-                check_cors_misconfig(domain);
+                check_cors_misconfig(domain.to_string());
                 info!(format!("Checked: {}", domain));
             }
         });
+    }
+
+    pub async fn run_cors_misconfig_tokio(domains: Vec<String>) {
+        let tasks = domains.into_iter().map(|domain| {
+            tokio::spawn(async move {
+                check_cors_misconfig(domain);
+            })
+        });
+
+        future::join_all(tasks).await;
     }
 }
 
@@ -783,7 +881,7 @@ pub fn wayback_urls(domain: String) {
 }
 
 /// a namespace for javascript functions
-mod javascript {
+pub mod javascript {
     use {
         crate::{request, save_util},
         colored::Colorize,
@@ -1159,6 +1257,8 @@ pub fn brokenlinks(domain: String) {
 pub mod tech {
     use crate::request;
     use crate::save_util;
+    use rayon::iter::IntoParallelRefIterator;
+    use rayon::iter::ParallelIterator;
     use reqwest::Error;
     use serde::{Deserialize, Serialize};
 
@@ -1231,6 +1331,16 @@ pub mod tech {
             }
         };
     }
+    pub fn find_tech_async_wrapper(domain: String) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(find_tech(domain));
+    }
+
+    pub fn find_tech_main(domains: Vec<String>) {
+        domains.par_iter().for_each(|domain| {
+            find_tech_async_wrapper(domain.clone());
+        });
+    }
 }
 
 pub fn smuggler(domain: String) {}
@@ -1269,8 +1379,8 @@ pub fn ip_addresses(domain: Vec<String>) -> Option<()> {
 /// It literally just finds a title in the html
 /// And Appends it, which would be better off just doing
 /// That in `enumerate_domain(...)`
-pub async fn domain_info(domain: &str) -> Option<()> {
-    return enumerate_domain(domain).await;
+pub async fn domain_info(domain: Vec<String>) -> Option<()> {
+    return Some(enumerate_domain::enumerate_domain_tokio(domain).await);
 }
 
 /// checks for important subdomains in a file or subdomains [completed]
@@ -1424,113 +1534,139 @@ pub fn nmap(domain: String) -> Option<()> {
 }
 
 /// i dunno what it does that others don't do
-async fn api_fuzzer(domain: String) -> Option<()> {
-    let error_patterns: Vec<_> = vec![
-        "404",
-        "Page Not Found",
-        "Not Found",
-        "Error 404",
-        "404 Not Found",
-        "The page you requested was not found",
-        "The requested URL was not found",
-        "This page does not exist",
-        "The requested page could not be found",
-        "Sorry, we couldn't find that page",
-        "Page doesn't exist",
-    ];
+pub mod api_fuzzer {
+    use crate::spyhunt_util::future;
+    use crate::{
+        file_util::{self, file_exists, read_from_file},
+        save_util,
+        user_agents::get_user_agent_prexisting,
+    };
+    use crate::{handle_deps, request};
+    use colored::Colorize;
+    use reqwest;
+    use std::collections::HashMap;
+    use std::fmt::format;
+    use tokio::sync::futures;
 
-    let user_agent = get_user_agent_prexisting();
-    let Session = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .timeout(std::time::Duration::new(5, 0))
-        .user_agent(user_agent)
-        .build()
-        .unwrap_or_else(|err| {
-            warn!(format!("unable to create Client Session\n{}", err));
-            panic!();
-        });
+    pub async fn api_fuzzer(domain: String) -> Option<()> {
+        let error_patterns: Vec<_> = vec![
+            "404",
+            "Page Not Found",
+            "Not Found",
+            "Error 404",
+            "404 Not Found",
+            "The page you requested was not found",
+            "The requested URL was not found",
+            "This page does not exist",
+            "The requested page could not be found",
+            "Sorry, we couldn't find that page",
+            "Page doesn't exist",
+        ];
 
-    if !file_exists(&"./payloads/api-endpoints.txt") {
-        warn!("could not if payloads/api-endpoints.txt, quitting....");
-        return None;
-    }
+        let user_agent = get_user_agent_prexisting();
+        let Session = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .timeout(std::time::Duration::new(5, 0))
+            .user_agent(user_agent)
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            });
 
-    let mut found_partterns: HashMap<String, String> = HashMap::new();
-    let mut existing_endpoints: Vec<String> = vec![];
-    let api_endpoints: Vec<String> =
-        read_from_file("./payloads/api-endpoints.txt".to_string()).unwrap();
+        let deps_path = handle_deps::check_or_clone_spyhuntrs_deps();
+        if !file_exists(&format!("{deps_path}/payloads/api-endpoints.txt")) {
+            warn!("could not find spyhuntrs-deps : payloads/api-endpoints.txt, quitting....");
+            return None;
+        }
 
-    for endpoint in &api_endpoints {
-        let url = request::urljoin(domain.clone(), endpoint.to_string());
-        match Session.get(url.clone()).send().await {
-            Ok(resp) => {
-                // get status code
-                match resp.status().as_u16() {
-                    403 | 404 => {}
-                    200 => {
-                        existing_endpoints.push(url.clone());
-                    }
-                    _ => {}
-                };
+        let mut found_partterns: HashMap<String, String> = HashMap::new();
+        let mut existing_endpoints: Vec<String> = vec![];
+        let api_endpoints: Vec<String> =
+            read_from_file(format!("{deps_path}/payloads/api-endpoints.txt")).unwrap();
 
-                // get pattern
-                let mut lower_text: String = String::new();
-                match resp.text().await {
-                    Ok(text_data) => {
-                        lower_text = text_data.to_lowercase();
-                        for pattern in &error_patterns {
-                            if lower_text.contains(pattern) {
-                                found_partterns.insert(endpoint.to_string(), pattern.to_string());
+        for endpoint in &api_endpoints {
+            let url = request::urljoin(domain.clone(), endpoint.to_string());
+            match Session.get(url.clone()).send().await {
+                Ok(resp) => {
+                    // get status code
+                    match resp.status().as_u16() {
+                        403 | 404 => {}
+                        200 => {
+                            existing_endpoints.push(url.clone());
+                        }
+                        _ => {}
+                    };
+
+                    // get pattern
+                    let mut lower_text: String = String::new();
+                    match resp.text().await {
+                        Ok(text_data) => {
+                            lower_text = text_data.to_lowercase();
+                            for pattern in &error_patterns {
+                                if lower_text.contains(pattern) {
+                                    found_partterns
+                                        .insert(endpoint.to_string(), pattern.to_string());
+                                }
                             }
                         }
-                    }
-                    Err(_) => {}
-                };
+                        Err(_) => {}
+                    };
 
-                // // see if title has some sort of 404
-                // let document = scraper::Html::parse_document(&lower_text.clone());
-                // // Define the title selector
-                // let title_selector = scraper::Selector::parse("title").unwrap();
-                //
-                // // Find the title element
-                // if let Some(title_element) = document.select(&title_selector).next() {
-                //     let title_text = title_element.text().collect::<String>().to_lowercase();
-                // }
-            }
-            Err(_) => {
-                warn!(format!("{domain} : failed to fetch endpoint {endpoint}"));
-            }
-        };
-    }
-
-    info_and_handle_data!(format!("{domain} : Found existing endpoints"), String);
-    if !existing_endpoints.is_empty() {
-        for i in &existing_endpoints {
-            println!(" |- {i}");
-            handle_data!(format!(" |- {i}"), String);
+                    // // see if title has some sort of 404
+                    // let document = scraper::Html::parse_document(&lower_text.clone());
+                    // // Define the title selector
+                    // let title_selector = scraper::Selector::parse("title").unwrap();
+                    //
+                    // // Find the title element
+                    // if let Some(title_element) = document.select(&title_selector).next() {
+                    //     let title_text = title_element.text().collect::<String>().to_lowercase();
+                    // }
+                }
+                Err(_) => {
+                    warn!(format!("{domain} : failed to fetch endpoint {endpoint}"));
+                }
+            };
         }
-    } else {
-        info!("No endpoints found");
-    }
 
-    info!(format!("{domain} : Patterns Found"));
-    if !found_partterns.is_empty() {
-        for (k, v) in &found_partterns {
-            println!(" |- Endpoint: {k} - pattern: {v}");
-            handle_data!(format!(" |- Endpoint: {k} - pattern: {v}"), String);
+        info_and_handle_data!(format!("{domain} : Found existing endpoints"), String);
+        if !existing_endpoints.is_empty() {
+            for i in &existing_endpoints {
+                println!(" |- {i}");
+                handle_data!(format!(" |- {i}"), String);
+            }
+        } else {
+            info!("No endpoints found");
         }
-    } else {
-        info!("No Patterns found");
+
+        info!(format!("{domain} : Patterns Found"));
+        if !found_partterns.is_empty() {
+            for (k, v) in &found_partterns {
+                println!(" |- Endpoint: {k} - pattern: {v}");
+                handle_data!(format!(" |- Endpoint: {k} - pattern: {v}"), String);
+            }
+        } else {
+            info!("No Patterns found");
+        }
+
+        Some(())
     }
 
-    Some(())
+    pub async fn api_fuzzer_tokio(domains: Vec<String>) {
+        let tasks = domains.into_iter().map(|domain| {
+            tokio::spawn(async move {
+                api_fuzzer(domain).await;
+            })
+        });
+        future::join_all(tasks).await;
+    }
 }
 
 pub mod forbiddenpass {
     use {
         crate::{
-            file_util::read_from_file, get_save_file, request::urljoin, save_util,
+            file_util::read_from_file, get_save_file, handle_deps, request::urljoin, save_util,
             user_agents::get_user_agent_prexisting,
         },
         colored::Colorize,
@@ -1596,7 +1732,8 @@ pub mod forbiddenpass {
     }
     /// i have no idea what it does
     pub async fn forbiddenpass(domain: String) -> Option<()> {
-        let wordlist = read_from_file("./payloads/bypasses.txt".to_string());
+        let deps_path = handle_deps::check_or_clone_spyhuntrs_deps();
+        let wordlist = read_from_file(format!("{deps_path}/payloads/bypasses.txt"));
 
         let Session = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
@@ -1637,12 +1774,12 @@ pub mod forbiddenpass {
 
 // run directory bruteforce using reqwest on [domain]
 // using [wordlist] with status code out of scope of [excluded_codes]
-pub fn directory_brute(
+pub async fn directory_brute(
     domain: String,
     wordlist: Vec<String>,
     excluded_codes: Vec<i32>,
 ) -> Option<()> {
-    let Session = reqwest::blocking::Client::builder()
+    let Session = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .redirect(reqwest::redirect::Policy::limited(10))
         .timeout(std::time::Duration::new(5, 0))
@@ -1662,6 +1799,7 @@ pub fn directory_brute(
         match Session
             .get(request::urljoin(domain.clone(), word.clone()))
             .send()
+            .await
         {
             Ok(resp) => {
                 match resp.status().as_u16() {
@@ -1693,11 +1831,20 @@ pub fn directory_brute(
     Some(())
 }
 
+pub fn directory_brute_async_wrapper(
+    domain: String,
+    wordlist: Vec<String>,
+    excluded_codes: Vec<i32>,
+) -> Option<()> {
+    return tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(directory_brute(domain, wordlist, excluded_codes));
+}
 /// Runs directory bruteforce on [domain] using a wordlist file [wordlist_file]
 /// and outputs all status codes out of [excluded_codes]
 /// run in parallel using rayon [completed]
 pub fn run_directory_brute_threads(
-    domains: Vec<&str>,
+    domains: Vec<String>,
     wordlist_file: String,
     excluded_codes: Vec<i32>,
 ) -> () {
@@ -1705,11 +1852,11 @@ pub fn run_directory_brute_threads(
         err!(format!("{wordlist_file} does not exist"));
     }
     let wordlists = read_from_file(wordlist_file).unwrap();
-    domains.par_iter().for_each(|&domain| {
+    domains.par_iter().for_each(|domain| {
         {
             info!(format!("Running Directory bruteforce for {}", domain));
             //std::thread::sleep(std::time::Duration::from_secs(1));
-            directory_brute(
+            directory_brute_async_wrapper(
                 domain.to_string(),
                 wordlists.clone(),
                 excluded_codes.clone(),
@@ -1770,7 +1917,7 @@ pub fn nuclei_lfi() -> Option<()> {
 }
 
 pub async fn google(domain: String) -> Option<()> {
-    println!("running...");
+    println!("{}", "searching...".yellow());
     let search = google_search::v2::user_agent::search(domain, 50).await;
     match search {
         Ok(data) => {
@@ -1805,9 +1952,15 @@ pub mod cidr_notation {
         },
     };
 
-    pub fn scan_all_ports(ip: String) -> Vec<u16> {
+    pub fn scan_all_ports(ip: String, Ports: Option<Vec<u16>>) -> Vec<u16> {
         info!(format!("Scanning {ip}"));
-        let ports: Vec<u16> = (1..=65535).collect();
+        let mut ports: Vec<u16> = Vec::new();
+        if let Some(P) = Ports {
+            ports = P;
+        } else {
+            info!("Scanning all Ports");
+            ports = (1..=65535).collect();
+        }
         ports
             .par_iter()
             .filter_map(|&port| {
@@ -1824,14 +1977,14 @@ pub mod cidr_notation {
             .collect::<Vec<u16>>()
     }
 
-    pub fn cidr_notation(ip: &str) {
-        let network = Ipv4Cidr::from_str(ip).unwrap();
+    pub fn cidr_notation(ip: String, Ports: Option<Vec<u16>>) {
+        let network = Ipv4Cidr::from_str(ip.as_str()).unwrap();
         let ips: Vec<_> = network.iter().map(|ip| ip.to_string()).collect::<Vec<_>>();
 
         let open_ports: Vec<(String, Vec<u16>)> = ips
             .into_par_iter()
             .filter_map(|ip| {
-                let _open_ports = scan_all_ports(ip.clone());
+                let _open_ports = scan_all_ports(ip.clone(), Ports.clone());
                 Some((ip.clone(), _open_ports))
             })
             .filter(|_open_ports| !_open_ports.1.is_empty())
@@ -1862,7 +2015,7 @@ pub fn print_all_ips(ip: &str) -> Option<()> {
 }
 
 pub mod xss_scan {
-    use crate::{file_util, request, save_util, spyhunt_util};
+    use crate::{file_util, handle_deps, request, save_util, spyhunt_util};
     use colored::Colorize;
     use core::fmt;
     use std::{collections::VecDeque, fmt::write, usize};
@@ -2035,11 +2188,14 @@ pub mod xss_scan {
     /// this takes in a  Vec of target because its multithreaded
     pub fn xxs_scanner(targets: Vec<String>) -> Option<()> {
         // read file
-        let payloads: Vec<String> = file_util::read_from_file("./payloads/xss.txt".to_string())
-            .unwrap_or_else(|_| {
-                warn!("Could not read from file payloads/xss.txt,exiting");
-                [].to_vec()
-            });
+        let deps_path = handle_deps::check_or_clone_spyhuntrs_deps();
+        let payloads: Vec<String> = file_util::read_from_file(format!(
+            "{deps_path}/payloads/xss.txt"
+        ))
+        .unwrap_or_else(|_| {
+            warn!("Could not read from file payloads/xss.txt,exiting");
+            [].to_vec()
+        });
         if payloads.len() == 0 {
             return None;
         }
@@ -2170,8 +2326,8 @@ pub mod sqli_scan {
 
     use {
         crate::{
-            check_if_save, file_util::read_from_file, request, save_util, spyhunt_util::xss_scan,
-            user_agents::get_user_agent_prexisting,
+            check_if_save, file_util::read_from_file, handle_deps, request, save_util,
+            spyhunt_util::xss_scan, user_agents::get_user_agent_prexisting,
         },
         colored::Colorize,
         rand::Rng,
@@ -2348,8 +2504,9 @@ pub mod sqli_scan {
         // he opens payloads file but does nothing to it
         // whyyyyyyyyyyy the hell????
         // open payloads/sqli.txt
+        let deps_path = handle_deps::check_or_clone_spyhuntrs_deps();
         let mut payloads: Vec<String> =
-            read_from_file("./payloads/sqli.txt".to_string()).unwrap_or([].to_vec());
+            read_from_file(format!("{deps_path}/payloads/sqli.txt")).unwrap_or([].to_vec());
 
         if payloads.is_empty() {
             payloads = [
@@ -2782,6 +2939,7 @@ pub mod javascript_endpoints {
 
         (url, endpoints)
     }
+
     pub fn analyze_js_files_wrapper(js_url: String) -> (String, Vec<String>) {
         let _runtime = tokio::runtime::Runtime::new().unwrap();
         _runtime.block_on(analyze_js_files(js_url))

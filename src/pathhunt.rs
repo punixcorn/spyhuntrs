@@ -3,20 +3,33 @@ use std::error::Error;
 use std::str::FromStr;
 
 use crate::file_util;
+use crate::handle_deps;
 use crate::request::{self, urljoin};
 use crate::user_agents::{self, get_user_agent};
 use colored::Colorize;
+use futures::future;
+use futures::SinkExt;
 use regex::Regex;
 use reqwest::header;
 use std::path::*;
 
 pub async fn get_path_traversal_list() -> Vec<String> {
-    let ret: Vec<String> =
-        file_util::read_from_file(String::from("./payloads/traversal.txt")).unwrap();
+    let mut ret: Vec<String> = Vec::new();
+    let deps_path = handle_deps::check_or_clone_spyhuntrs_deps();
+    let path = format!("{deps_path}/payloads/traversal.txt");
+    if file_util::file_exists(&path) {
+        ret = file_util::read_from_file(path).unwrap();
+    } else {
+        warn!(format!(
+            "spyhuntrs-deps is needed:\n RUN:{}",
+            "git clone https://github.com/punixcorn/spyhuntrs-deps ~/.spyhuntrs-deps".green()
+        ));
+        std::process::exit(1);
+    }
     return ret;
 }
 
-pub async fn scan_target(target: &String) -> Option<()> {
+pub async fn scan_target(target: String) -> Option<()> {
     let user_agent = get_user_agent(false, false).await.to_string();
     let mut vulnerable: Vec<String> = vec![];
 
@@ -54,6 +67,15 @@ pub async fn scan_target(target: &String) -> Option<()> {
         }
     }
     Some(())
+}
+
+pub async fn scan_target_tokio(targets: Vec<String>) {
+    let tasks = targets.into_iter().map(|domain| {
+        tokio::spawn(async move {
+            scan_target(domain).await;
+        })
+    });
+    future::join_all(tasks).await;
 }
 
 pub async fn scan_params(target: &String) -> Option<()> {
