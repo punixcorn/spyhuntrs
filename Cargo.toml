@@ -2,6 +2,9 @@
 name = "spyhuntrs"
 version = "0.1.0"
 edition = "2021"
+authors = ["potato"]
+description = "A comprehensive network scanning and vulnerability assessment tool."
+license = "MIT"
 
 
 [dependencies]
@@ -26,3 +29,11 @@ htmlescape = "0.3.1"
 urlencoding = "2.1.3"
 clap = { version = "4.5.23", features = ["derive"] }
 clap_derive = "4.5.18"
+strip-ansi-escapes = "0.2.0"
+tokio-stream = "0.1.17"
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3

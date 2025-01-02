@@ -59,12 +59,12 @@ pub fn save_vec_strings(buffer: Vec<String>) {
     }
 }
 
-///
+/// write `buffer` into save_file
 pub fn save_string(buffer: String) {
     let mut file: File;
     let path = &get_save_file();
     file = OpenOptions::new().append(true).open(&path).unwrap();
-    writeln!(file, "{}", buffer).unwrap();
+    writeln!(file, "{}", strip_ansi_escapes::strip_str(buffer)).unwrap();
 }
 
 ///
@@ -76,113 +76,152 @@ pub fn save_str(buffer: &str) {
 }
 
 /// this should probably handle logging info out before saving
+// macro_rules! handle_data {
+//     ($s:expr, &str) => {
+//         if save_util::check_if_save() {
+//             if save_util::get_save_file().is_empty() {
+//                 err!("no save file defined");
+//             }
+//             save_util::save_str($s)
+//         }
+//     };
+//     ($s:expr,String) => {
+//         if save_util::check_if_save() {
+//             if save_util::get_save_file().is_empty() {
+//                 err!("no save file defined");
+//             }
+//             save_util::save_string($s)
+//         }
+//     };
+//
+//     ($vec: expr,Vec<&str>) => {
+//         if save_util::check_if_save() {
+//             if save_util::get_save_file().is_empty() {
+//                 err!("no save file defined");
+//             }
+//             save_util::save_vec_strs($vec);
+//         }
+//     };
+//
+//     ($vec:expr, Vec<String>) => {
+//         if save_util::check_if_save() {
+//             if save_util::get_save_file().is_empty() {
+//                 err!("no save file defined");
+//             }
+//             save_util::save_vec_strings($vec);
+//         }
+//     };
+// }
+
+// macro_rules! info_and_handle_data {
+//     ($s:expr, &str) => {
+//         info!(format!("{}", $s));
+//         if save_util::check_if_save() {
+//             if save_util::get_save_file().is_empty() {
+//                 err!("no save file defined");
+//             }
+//             save_util::save_str($s)
+//         }
+//     };
+//     ($s:expr,String) => {
+//         info!($s);
+//         if save_util::check_if_save() {
+//             if save_util::get_save_file().is_empty() {
+//                 err!("no save file defined");
+//             }
+//             save_util::save_string($s)
+//         }
+//     };
+//
+//     ($vec: expr,Vec<&str>) => {
+//         for i in $vec {
+//             info!(format!("{i}"));
+//         }
+//         if save_util::check_if_save() {
+//             if save_util::get_save_file().is_empty() {
+//                 err!("no save file defined");
+//             }
+//             save_util::save_vec_strs($vec);
+//         }
+//     };
+//
+//     ($vec:expr, Vec<String>) => {
+//         for i in $vec {
+//             info!(format!("{i}"));
+//         }
+//         if save_util::check_if_save() {
+//             if save_util::get_save_file().is_empty() {
+//                 err!("no save file defined");
+//             }
+//             save_util::save_vec_strings($vec);
+//         }
+//     };
+// }
+
 #[macro_export]
-macro_rules! handle_data {
-    ($s:expr, &str) => {
+macro_rules! write_info {
+    ($s:expr) => {
         if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
-            save_util::save_str($s)
-        }
-    };
-    ($s:expr,String) => {
-        if save_util::check_if_save() {
-            if save_util::get_save_file().is_empty() {
-                err!("no save file defined");
-            }
-            save_util::save_string($s)
+            save_util::save_string(format!("{}",$s))
         }
     };
 
-    ($vec: expr,Vec<&str>) => {
+    ($fmt:expr, $($arg:tt)*) => {
         if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
-            save_util::save_vec_strs($vec);
-        }
-    };
-
-    ($vec:expr, Vec<String>) => {
-        if save_util::check_if_save() {
-            if save_util::get_save_file().is_empty() {
-                err!("no save file defined");
-            }
-            save_util::save_vec_strings($vec);
+            let formatted_message = format!($fmt, $($arg)*);
+            save_util::save_string(formatted_message)
         }
     };
 }
 
-#[macro_export]
-macro_rules! info_and_handle_data {
-    ($s:expr, &str) => {
-        info!(format!("{}", $s));
+macro_rules! write_info_and_print_info {
+    ($s:expr) => {
         if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
-            save_util::save_str($s)
-        }
-    };
-    ($s:expr,String) => {
-        info!($s);
-        if save_util::check_if_save() {
-            if save_util::get_save_file().is_empty() {
-                err!("no save file defined");
-            }
-            save_util::save_string($s)
+            info!($s);
+            save_util::save_string(format!("{}",$s))
         }
     };
 
-    ($vec: expr,Vec<&str>) => {
-        for i in $vec {
-            info!(format!("{i}"));
-        }
+    ($fmt:expr, $($arg:tt)*) => {
         if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
-            save_util::save_vec_strs($vec);
-        }
-    };
-
-    ($vec:expr, Vec<String>) => {
-        for i in $vec {
-            info!(format!("{i}"));
-        }
-        if save_util::check_if_save() {
-            if save_util::get_save_file().is_empty() {
-                err!("no save file defined");
-            }
-            save_util::save_vec_strings($vec);
+            let formatted_message = format!($fmt, $($arg)*);
+            info!(formatted_message);
+            save_util::save_string(formatted_message)
         }
     };
 }
 
-/*
-pub struct saveinfo {
-    pub file_name: &'static str,
-    pub should_save: bool,
-}
-
-impl saveinfo {
-    pub fn save(&self, data: Vec<String>) -> Result<(), &'static str> {
-        if !self.should_save {
-            return Ok(());
+macro_rules! write_info_and_print {
+    ($s:expr) => {
+        if save_util::check_if_save() {
+            if save_util::get_save_file().is_empty() {
+                err!("no save file defined");
+            }
+            println!($s);
+            save_util::save_string(format!("{}",$s))
         }
-        if self.file_name.is_empty() {
-            return Err("File name is empty");
-        }
-        let _ = utils::write_to_file(data, self.file_name.to_string().clone());
-        Ok(())
-    }
+    };
 
-    pub fn new(save_file: &'static str, shouldsave: bool) -> Self {
-        return Self {
-            file_name: save_file,
-            should_save: shouldsave,
-        };
-    }
+    ($fmt:expr, $($arg:tt)*) => {
+        if save_util::check_if_save() {
+            if save_util::get_save_file().is_empty() {
+                err!("no save file defined");
+            }
+            let formatted_message = format!($fmt, $($arg)*);
+            println!("{}",formatted_message);
+            save_util::save_string(formatted_message)
+        }
+    };
 }
-*/

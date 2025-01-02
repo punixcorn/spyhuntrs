@@ -44,6 +44,7 @@ fn is_program_in_path(program: &str) -> bool {
     }
     false
 }
+
 /// takes a vector of strings of the full command and runs it
 /// eg run_cmd([["ls","-al"]].to_vec);
 pub fn run_cmd(mut args: Vec<&str>) -> Option<cmd_info> {
@@ -169,4 +170,30 @@ pub fn run_piped(mut cmd1: Vec<&str>, mut cmd2: Vec<&str>) -> Option<cmd_info> {
     //
     // }
     return Some(cmd_result);
+}
+
+/// i just realized?? we can just pass all the stuff to bash and grap output
+/// cmd will be passed to bash
+/// bash -c $cmd
+pub fn run_bash(cmd: String) -> Option<cmd_info> {
+    let mut bash_proc = Command::new("bash")
+        .args(["-c", cmd.as_str()])
+        .stdin(Stdio::inherit())
+        .output();
+
+    let mut _x = match bash_proc {
+        Ok(ok) => ok,
+        Err(err) => panic!(
+            "error occured during running command: {}\n{}",
+            cmd,
+            err.to_string()
+        ),
+    };
+
+    Some(cmd_info {
+        output: Some(_x.clone()),
+        stderr: Some(String::from_utf8(_x.stderr).unwrap_or_else(|_| String::from(""))),
+        stdout: Some(String::from_utf8(_x.stdout).unwrap_or_else(|_| String::from(""))),
+        status: Some(_x.status.signal().unwrap_or_else(|| 1)),
+    })
 }

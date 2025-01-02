@@ -65,6 +65,8 @@ use {
         string,
         sync::{Arc, Mutex},
     },
+    strip_ansi_escapes,
+    tokio_stream::{self as stream, StreamExt},
 };
 
 /// take a target string
@@ -101,12 +103,13 @@ pub fn parse_for_domains(file_or_domain: String) -> Vec<String> {
 /// ```
 pub fn get_reverse_ip(ip: Vec<&str>) -> Option<()> {
     for d in ip {
+        write_info!("[Reverse ip]");
         let ip_addr: Result<IpAddr, _> = d.parse();
         match ip_addr {
             Ok(data) => {
                 match dns_lookup::lookup_addr(&data) {
                     Ok(d_name) => {
-                        info_and_handle_data!(format!("{d} {d_name}"), String);
+                        write_info_and_print!(" |-{} {}", d, d_name);
                     }
                     _ => {
                         warn!(format!("{d} : Could not get domain name"));
@@ -135,8 +138,7 @@ pub async fn shodan_api(api_key: String, domain: String, extract_domain_only: bo
         // get domains
         for i in &y {
             for domain in &i.domains {
-                info!(format!("ss"));
-                handle_data!(domain.to_string(), String);
+                write_info_and_print!(" |- {}", domain.to_string());
             }
         }
     } else {
@@ -156,8 +158,7 @@ pub async fn shodan_api(api_key: String, domain: String, extract_domain_only: bo
                 i.domains.join(",")
             );
 
-            info!(entry);
-            handle_data!(entry, String);
+            write_info_and_print!(" |-{}", entry);
         }
     }
 }
@@ -171,16 +172,16 @@ pub async fn shodan_api(api_key: String, domain: String, extract_domain_only: bo
 
 /// find subdomains in a domain from [completed]
 pub async fn subdomain_finder(domain: Vec<String>) -> Option<()> {
-    let deps_path = handle_deps::check_or_clone_spyhuntrs_deps();
-    let certsh_path = format!("{deps_path}/scripts/certsh.sh");
-    let spotter_path = format!("{deps_path}/scripts/spotter.sh");
-
-    if !file_exists(&certsh_path) || !file_exists(&spotter_path) {
-        err!(format!(
-            "{} or {} does not exist",
-            certsh_path, spotter_path
-        ));
-    };
+    // let deps_path = handle_deps::check_or_clone_spyhuntrs_deps();
+    // let certsh_path = format!("{deps_path}/scripts/certsh.sh");
+    // let spotter_path = format!("{deps_path}/scripts/spotter.sh");
+    //
+    // if !file_exists(&certsh_path) || !file_exists(&spotter_path) {
+    //     err!(format!(
+    //         "{} or {} does not exist",
+    //         certsh_path, spotter_path
+    //     ));
+    // };
 
     // run subfinder -d {domain} -silent
     for d in &domain {
@@ -188,10 +189,13 @@ pub async fn subdomain_finder(domain: Vec<String>) -> Option<()> {
             Some(data) => {
                 match data.stdout {
                     Some(x) => {
+                        write_info_and_print!("[DOMAIN SCAN]");
                         for i in x.split('\n').into_iter() {
-                            info!(format!("{}\n", i));
-                            handle_data!(i, &str);
+                            if !i.is_empty() {
+                                write_info_and_print!(" |- {}", i);
+                            }
                         }
+                        write_info_and_print!(" *");
                     }
                     None => warn!(format!("{d} : error occured")),
                 };
@@ -201,29 +205,54 @@ pub async fn subdomain_finder(domain: Vec<String>) -> Option<()> {
     }
 
     // closure to run scripts
-    let run_scripts = |str1: String| {
-        for d in &domain {
-            match cmd_handlers::run_piped_strings(format!("{str1} {d}"), "uniq".to_string()) {
-                Some(data) => {
-                    match data.stdout {
-                        Some(x) => {
-                            for i in x.split('\n').into_iter() {
-                                info!(format!("{}\n", i));
-                                handle_data!(i, &str);
+    // let run_scripts = |str1: String| {
+    //     for d in &domain {
+    //         match cmd_handlers::run_piped_strings(format!("{str1} {d}"), "uniq".to_string()) {
+    //             Some(data) => {
+    //                 match data.stdout {
+    //                     Some(x) => {
+    //                         for i in x.split('\n').into_iter() {
+    //                             if !i.is_empty() {
+    //                                 info!(format!("{}", i));
+    //                                 handle_data!(i, &str);
+    //                             }
+    //                         }
+    //                     }
+    //                     None => warn!(format!("{d} : error occured")),
+    //                 };
+    //             }
+    //             None => warn!(format!("{d} : error occured")),
+    //         }
+    //     }
+    // };
+    info!("Running Scripts...");
+    // run spotter [ this doesn't work ]
+    // run_scripts(format!("bash {spotter_path}"));
+    // run certsh [ this i moved below]
+    // run_scripts(format!("bash {certsh_path}"));
+
+    // using commmand
+    for d in &domain {
+        match cmd_handlers::run_bash(format!(
+            r#"curl -s https://crt.sh/?Identity=%.{d} | grep ">*.{d}" | sed 's/<[/]*[TB][DR]>/\n/g' | grep -vE "<|^[\*]*[\.]*{d}" | sort -u | awk 'NF'"#
+        )) {
+            Some(data) => {
+                match data.stdout {
+                    Some(x) => {
+                        for i in x.split('\n').into_iter() {
+                            if !i.is_empty() {
+                                write_info_and_print!(" |- {}", i);
                             }
                         }
-                        None => warn!(format!("{d} : error occured")),
-                    };
-                }
-                None => warn!(format!("{d} : error occured")),
+                        write_info_and_print!(" *");
+                    }
+                    None => warn!(format!("{d} : error occured")),
+                };
             }
+            None => warn!(format!("{d} : error occured")),
         }
-    };
+    }
 
-    // run spotter
-    run_scripts(format!("bash {spotter_path}"));
-    // run certsh
-    run_scripts(format!("bash {certsh_path}"));
     Some(())
 }
 
@@ -235,9 +264,14 @@ pub fn webcrawler(domain: Vec<String>) -> Option<()> {
             Some(data) => {
                 match data.stdout {
                     Some(x) => {
-                        for i in x.split('\n').into_iter() {
-                            info!(format!("{}\n", i));
-                            handle_data!(i, &str);
+                        let _vec = x.split('\n').collect::<Vec<_>>();
+                        if _vec.is_empty() {
+                            write_info_and_print!(" |- no data gotten from hakrawler\n *");
+                        } else {
+                            for i in &_vec {
+                                write_info_and_print!(" |-{}\n", i);
+                            }
+                            write_info_and_print!(" *");
                         }
                     }
                     None => {
@@ -266,8 +300,7 @@ pub fn status_code(domain: &str) -> Option<()> {
         Some(data) => {
             match data.stdout {
                 Some(x) => {
-                    info!(format!("{}\n", x));
-                    handle_data!(&x, &str);
+                    write_info_and_print!(" |-{}\n", x);
                 }
                 None => match data.stderr {
                     Some(y) => {
@@ -294,7 +327,7 @@ pub fn status_code(domain: &str) -> Option<()> {
     //             .clone()
     //             .unwrap_or_else(|| format!("{domain} [err]"));
     //         info!(x);
-    //         handle_data!(x, String);
+    //         handle_data!(x, );
     //     }
     //     _ => warn!(format!("err occured for {domain}")),
     // }
@@ -318,11 +351,10 @@ pub mod status_code {
         let resp = fetch_url!(domain.to_string());
         match resp {
             Ok(data) => {
-                info!(format!("{d} [{}]", data.status().as_u16()));
-                handle_data!(format!("{d} [{}]", data.status().as_u16()), String);
+                write_info_and_print!(" |- {} [{}]", d, data.status().as_u16());
             }
             Err(_) => {
-                warn!(format!("{d} [no infomation]"));
+                warn!("{} [no infomation]", d);
                 return None;
             }
         };
@@ -423,8 +455,7 @@ pub mod enumerate_domain {
             }
 
             let data = format!("{d} [{domain_ip}] : [{server}]");
-            info!(data);
-            handle_data!(data, String);
+            write_info_and_print!(" |-{}", data);
             return Some(());
         }
 
@@ -457,8 +488,7 @@ pub async fn get_favicon_hash(domain: String) -> Option<()> {
                 let mut base_64 = general_purpose::STANDARD.encode(body.bytes().await.unwrap());
                 // let hash = murmur3_32(&mut std::io::Cursor::new(base_64), 0).unwrap();
                 let hash = (murmurhash3::murmurhash3_x86_32(base_64.as_bytes(), 0)) as i32;
-                info!(format!("{domain} favicon hash : [{hash}]"));
-                handle_data!(format!("{domain} favicon hash : [{hash}]"), String);
+                write_info_and_print!(" |-{} favicon hash : [{}]", domain, hash);
                 return Some(());
             }
             warn!(format!("could not find favicon for {}", domain.clone()));
@@ -546,8 +576,7 @@ pub mod check_cors_misconfig {
         } else {
             vuln_status = "NOT VULNERABLE".to_string();
         }
-        info!(format!("{vuln_status}: {domain}"));
-        handle_data!(format!("{vuln_status} : {domain}"), String);
+        write_info_and_print!(" |-[{}] {}", vuln_status, domain);
     }
 
     /// checks for cors misconfiguration in parallel using rayon [completed]
@@ -766,39 +795,39 @@ pub async fn check_security_headers(domain: String) {
                 let h = key.unwrap().as_str().to_string();
                 match h.to_lowercase().as_str() {
                     "strict-transport-security" => {
-                        info!(format!(
-                            "{domain} : Found Security Header {}",
+                        write_info_and_print!(
+                            " |-{} : Found Security Header {}",
+                            domain,
                             security_headers[0]
-                        ));
-                        handle_data!(format!("{domain} : {}", security_headers[0]), String);
+                        );
                     }
                     "content-security-policy" => {
-                        info!(format!(
-                            "{domain} : Found Security Header {}",
+                        write_info_and_print!(
+                            " |-{} : Found Security Header {}",
+                            domain,
                             security_headers[0]
-                        ));
-                        handle_data!(format!("{domain} : {}", security_headers[1]), String);
+                        );
                     }
                     "x-frame-options" => {
-                        info!(format!(
-                            "{domain} : Found Security Header {}",
+                        write_info_and_print!(
+                            " |-{} : Found Security Header {}",
+                            domain,
                             security_headers[0]
-                        ));
-                        handle_data!(format!("{domain} : {}", security_headers[2]), String);
+                        );
                     }
                     "x-content-type-options" => {
-                        info!(format!(
-                            "{domain} : Found Security Header {}",
+                        write_info_and_print!(
+                            " |-{} : Found Security Header {}",
+                            domain,
                             security_headers[0]
-                        ));
-                        handle_data!(format!("{domain} : {}", security_headers[3]), String);
+                        );
                     }
                     "x-xss-protection" => {
-                        info!(format!(
-                            "{domain} : Found Security Header {}",
+                        write_info_and_print!(
+                            " |-{} : Found Security Header {}",
+                            domain,
                             security_headers[0]
-                        ));
-                        handle_data!(format!("{domain} : {}", security_headers[4]), String);
+                        );
                     }
                     _ => {}
                 }
@@ -816,8 +845,7 @@ pub fn network_analyzer(domain: String) {
     match run_cmd_string(format!("shodan stats --facets port net:{}", domain)) {
         Some(data) => match data.stdout {
             Some(out) => {
-                info!(format!("{out}"));
-                handle_data!(format!("{out}"), String);
+                write_info_and_print!("{}", out);
             }
             _ => match data.stderr {
                 Some(out) => warn!(format!("stderr : {out}")),
@@ -837,8 +865,7 @@ pub fn network_analyzer(domain: String) {
     match run_cmd_string(format!("shodan stats --facets vuln net:{}", domain)) {
         Some(data) => match data.stdout {
             Some(out) => {
-                info!(format!("{out}"));
-                handle_data!(format!("{out}"), String);
+                write_info_and_print!("{}", out);
             }
             _ => match data.stderr {
                 Some(out) => warn!(format!("stderr : {out}")),
@@ -861,8 +888,7 @@ pub fn wayback_urls(domain: String) {
     match run_piped_strings(format!("waybackurls {}", domain), format!("anew")) {
         Some(data) => match data.stdout {
             Some(out) => {
-                info!(format!("{out}"));
-                handle_data!(format!("{out}"), String);
+                write_info_and_print!("{}", out);
             }
             _ => match data.stderr {
                 Some(out) => warn!(format!("stderr : {out}")),
@@ -885,6 +911,7 @@ pub mod javascript {
     use {
         crate::{request, save_util},
         colored::Colorize,
+        futures::{SinkExt, StreamExt},
         rayon::iter::{IntoParallelRefIterator, ParallelIterator},
         reqwest::Url,
         scraper::selectable::Selectable,
@@ -1016,7 +1043,7 @@ pub mod javascript {
     /// - prints them out
     ///
     /// Takes Vec of urls because it runs multithreading
-    pub fn crawl_website(urls: Vec<String>) -> Option<()> {
+    pub async fn crawl_website(urls: Vec<String>) -> Option<()> {
         /*
          * i will use tokio::Semaphore later when i grasp it
          */
@@ -1024,41 +1051,74 @@ pub mod javascript {
             return None;
         }
 
-        let results: Vec<HashMap<&String, (Vec<String>, Vec<String>)>> = urls
-            .par_iter()
-            .filter_map(|url| {
-                let domain: Option<String> = match reqwest::Url::parse(url.as_str()) {
-                    Ok(_url) => match _url.domain() {
-                        Some(d) => Some(d.to_string()),
-                        _ => None,
-                    },
-                    Err(_) => None,
-                };
-                let data =
-                    get_js_links_async_wrapper(url.to_string(), Some("".to_string()).clone());
-                Some(HashMap::from([(url, (data))]))
-            })
-            .collect();
+        // let results: Vec<HashMap<&String, (Vec<String>, Vec<String>)>> = urls
+        //     .par_iter()
+        //     .filter_map(|url| {
+        //         let domain: Option<String> = match reqwest::Url::parse(url.as_str()) {
+        //             Ok(_url) => match _url.domain() {
+        //                 Some(d) => Some(d.to_string()),
+        //                 _ => None,
+        //             },
+        //             Err(_) => None,
+        //         };
+        //         let data =
+        //             get_js_links_async_wrapper(url.to_string(), Some("".to_string()).clone());
+        //         Some(HashMap::from([(url, (data))]))
+        //     })
+        //     .collect();
 
-        for hashmap in results {
-            for (url, vecs) in hashmap {
-                info_and_handle_data!(format!("url :{url}"), String);
-                if vecs.0.is_empty() {
-                    println!("no javascript files found")
-                } else {
-                    println!(" *Javascript Files");
-                    for _js_files in vecs.0 {
-                        println!(" |-{}", _js_files);
-                        handle_data!(format!(" |-{}", _js_files), String);
+        let mut url_stream = tokio_stream::iter(urls.clone());
+        let mut handles = Vec::new();
+
+        while let Some(url) = url_stream.next().await {
+            let url = url.clone();
+            let handle = tokio::task::spawn(async move {
+                let domain = reqwest::Url::parse(&url)
+                    .ok()
+                    .and_then(|parsed_url| parsed_url.domain().map(|d| d.to_string()));
+
+                let data = get_js_links(url.clone(), domain).await;
+
+                HashMap::from([(url.clone(), data)])
+            });
+            handles.push(handle);
+        }
+
+        let results: Vec<HashMap<String, (Vec<String>, Vec<String>)>> =
+            futures::future::join_all(handles)
+                .await
+                .into_iter()
+                .filter_map(|res| res.ok())
+                .collect();
+
+        if !results.is_empty() {
+            if results[0].is_empty() {
+                info!("No JavaScript files found");
+            } else {
+                info!("[JavaScript files]");
+            }
+            for hashmap in results {
+                for (url, vecs) in hashmap {
+                    write_info_and_print!(" |- [URL] {}", url);
+                    if vecs.0.is_empty() {
+                        write_info_and_print!(" |- no javascript files found");
+                        write_info_and_print!(" *");
+                    } else {
+                        write_info_and_print!(" |- [Javascript Files]");
+                        for _js_files in vecs.0 {
+                            write_info_and_print!(" |- {}", _js_files);
+                        }
+                        write_info_and_print!(" *");
                     }
-                }
-                if vecs.1.is_empty() {
-                    println!("no javascript files found")
-                } else {
-                    println!(" *Javascript Links");
-                    for _js_links in vecs.1 {
-                        println!(" |-{}", _js_links);
-                        handle_data!(format!(" |-{}", _js_links), String);
+                    if vecs.1.is_empty() {
+                        write_info_and_print!(" |- no javascript links found");
+                        write_info_and_print!(" *");
+                    } else {
+                        write_info_and_print!(" |- [Javascript Links]");
+                        for _js_links in vecs.1 {
+                            write_info_and_print!(" |- {}", _js_links);
+                        }
+                        write_info_and_print!(" *");
                     }
                 }
             }
@@ -1074,24 +1134,29 @@ pub fn dns(domain: String) {
     for cmd in &commands {
         match place {
             0 => {
-                info!("Printing A records");
-                handle_data!(format!("{domain}: A records"), String);
+                write_info_and_print!("{} [A records]", domain);
             }
             1 => {
                 info!("Printing NS records");
-                handle_data!(format!("{domain}: NS records"), String);
+                write_info_and_print!("{} [NS records]", domain);
             }
             2 => {
                 info!("Printing CNAME records");
-                handle_data!(format!("{domain}: CNAME records"), String);
+                write_info_and_print!("{} [CNAME records]", domain);
             }
             _ => {}
         };
-        match run_piped_strings(format!("echo {}", domain), format!("dnsx -slient {}", cmd)) {
+        match run_piped_strings(format!("echo {}", domain), format!("dnsx -silent {}", cmd)) {
             Some(data) => match data.stdout {
                 Some(out) => {
-                    info!(format!("{out}"));
-                    handle_data!(format!("{out}"), String);
+                    let out_vec = out.split("\n").collect::<Vec<&str>>();
+                    for i in out_vec {
+                        if !i.is_empty() {
+                            write_info_and_print!(" |-{i}");
+                        } else {
+                            write_info_and_print!(" |-No More record found\n *");
+                        }
+                    }
                 }
                 _ => match data.stderr {
                     Some(out) => warn!(format!("stderr : {out}")),
@@ -1107,6 +1172,7 @@ pub fn dns(domain: String) {
                 warn!(format!("running dnsx on {} failed", domain.clone()));
             }
         };
+        place += 1;
     }
 }
 
@@ -1126,7 +1192,7 @@ pub fn probe(domain: String) {
                             match resp.stdout {
                                 Some(_stdout) => {
                                     info!(format!("{_stdout}"));
-                                    handle_data!(format!("{_stdout}"), String);
+                                    write_info_and_print!("{}", _stdout);
                                 }
                                 None => match data.stderr {
                                     Some(_stderr) => warn!(format!("stderr : {_stderr}")),
@@ -1185,8 +1251,15 @@ pub fn redirects(domain: String) {
                         Some(resp) => {
                             match resp.stdout {
                                 Some(_stdout) => {
-                                    info!(format!("{_stdout}"));
-                                    handle_data!(format!("{_stdout}"), String);
+                                    let _vec = _stdout.split('\n').collect::<Vec<_>>();
+                                    if _vec.is_empty() {
+                                        write_info_and_print!(" |- no info from httpx\n *");
+                                    } else {
+                                        for i in &_vec {
+                                            write_info_and_print!(" |- {}", i);
+                                        }
+                                        write_info_and_print!(" *");
+                                    }
                                 }
                                 None => match data.stderr {
                                     Some(_stderr) => warn!(format!("stderr : {_stderr}")),
@@ -1235,8 +1308,7 @@ pub fn brokenlinks(domain: String) {
     )) {
         Some(data) => match data.stdout {
             Some(out) => {
-                info!(format!("{out}"));
-                handle_data!(format!("{out}"), String);
+                write_info_and_print!(" |- {}", out);
             }
             _ => match data.stderr {
                 Some(out) => warn!(format!("stderr : {out}")),
@@ -1310,13 +1382,21 @@ pub mod tech {
         match resp {
             Ok(json) => match json.json::<ApiResponse>().await {
                 Ok(ds) => {
-                    info_and_handle_data!(format!("{domain}"), String);
-                    for i in &ds.groups {
-                        println!("-{}", i.name);
-                        handle_data!(format!("-{}", i.name), String);
-                        for j in &i.categories {
-                            println!(" |-{}", i.name);
-                            handle_data!(format!(" |-{}", i.name), String);
+                    write_info_and_print!("[TECH] : {}", domain);
+                    if ds.groups.is_empty() {
+                        write_info_and_print!("  |- no information on site");
+                        write_info_and_print!("  *");
+                    } else {
+                        for i in &ds.groups {
+                            write_info_and_print!(" |-{}", i.name);
+                            if !i.categories.is_empty() {
+                                for j in &i.categories {
+                                    write_info_and_print!("  |-{}", i.name);
+                                }
+                            } else {
+                                write_info_and_print!("  |- tech found");
+                                write_info_and_print!("  *");
+                            }
                         }
                     }
                 }
@@ -1357,8 +1437,7 @@ pub fn ip_addresses(domain: Vec<String>) -> Option<()> {
                 match ip.get(0) {
                     Some(v4) => {
                         let ip_v4 = v4.to_string();
-                        info!(format!("{d} : [{ip_v4}]"));
-                        handle_data!(ip_v4, String);
+                        write_info_and_print!(" |-{} : [{}]", d, ip_v4);
                     }
                     _ => {
                         warn!(format!("could not parse data gotten from lookup for {}", d));
@@ -1402,13 +1481,14 @@ pub fn importantsubdomains(subdomain_file: String) {
                     }
                 }
             }
-
+            write_info_and_print!("[IMPORTANT SUBDOMAINS]");
             if importantsubs.is_empty() {
-                warn!(format!("No important subdomain found"));
+                warn!("No important subdomain found");
+                write_info!("No important subdomain found");
                 return;
             }
             for i in importantsubs {
-                info_and_handle_data!(format!("{i}"), String);
+                write_info_and_print!("{}", i);
             }
         }
         Err(_) => {
@@ -1433,7 +1513,7 @@ pub async fn find_not_found(domains_file: String) -> Option<()> {
         });
 
     if !file_exists(&domains_file) {
-        err!(format!("{domains_file} does not exist"));
+        err!("{} does not exist", domains_file);
     }
 
     match read_from_file(domains_file) {
@@ -1458,10 +1538,11 @@ pub async fn find_not_found(domains_file: String) -> Option<()> {
         }
     }
     if not_found_domains.is_empty() {
-        warn!(format!("no 404 subdomain found"));
-    }
-    for sub in &not_found_domains {
-        info_and_handle_data!(format!("{sub} : 404 [NOT FOUND]"), String);
+        warn!("No 404 subdomain found");
+    } else {
+        for sub in &not_found_domains {
+            write_info_and_print!(" |-{sub} [NOT FOUND]");
+        }
     }
     Some(())
 }
@@ -1471,8 +1552,7 @@ pub fn paramspider(domain: String) -> Option<()> {
     match run_cmd_string(format!("paramspider -d {domain}")) {
         Some(data) => match data.stdout {
             Some(out) => {
-                info!(format!("{out}"));
-                handle_data!(format!("{out}"), String);
+                write_info_and_print!(" |- {}", out);
                 match data.stderr {
                     Some(out) => {
                         if out.contains("SyntaxWarning: invalid escape sequence") {
@@ -1480,7 +1560,9 @@ pub fn paramspider(domain: String) -> Option<()> {
                                 if line.contains("SyntaxWarning: invalid escape sequence") {
                                     continue;
                                 }
-                                info_and_handle_data!(format!("{line}"), String);
+                                if line.contains("[") {
+                                    write_info_and_print!("{line}");
+                                }
                             }
                         }
                     }
@@ -1488,18 +1570,18 @@ pub fn paramspider(domain: String) -> Option<()> {
                 }
             }
             None => match data.stderr {
-                Some(out) => warn!(format!("stderr : {out}")),
+                Some(out) => warn!("stderr : {}", out),
                 _ => {
-                    warn!(format!(
+                    warn!(
                         "running paramspider on {} failed, no output",
                         domain.clone()
-                    ));
+                    );
                     return None;
                 }
             },
         },
         _ => {
-            warn!(format!("running paramspider on {} failed", domain.clone()));
+            warn!("running paramspider on {} failed", domain.clone());
             return None;
         }
     }
@@ -1511,22 +1593,18 @@ pub fn nmap(domain: String) -> Option<()> {
     let ip = match run_cmd_string(format!("nmap -vvv {domain} -sV")) {
         Some(data) => match data.stdout {
             Some(out) => {
-                info!(format!("{out}"));
-                handle_data!(format!("{out}"), String);
+                write_info_and_print!("{}", out);
             }
             _ => match data.stderr {
-                Some(out) => warn!(format!("stderr : {out}")),
+                Some(out) => warn!("stderr : {}", out),
                 _ => {
-                    warn!(format!(
-                        "running nmap on {} failed, no output",
-                        domain.clone()
-                    ));
+                    warn!("running nmap on {} failed, no output", domain.clone());
                     return None;
                 }
             },
         },
         _ => {
-            warn!(format!("running nmap on {} failed", domain.clone()));
+            warn!("running nmap on {} failed", domain.clone());
             return None;
         }
     };
@@ -1625,30 +1703,30 @@ pub mod api_fuzzer {
                     // }
                 }
                 Err(_) => {
-                    warn!(format!("{domain} : failed to fetch endpoint {endpoint}"));
+                    warn!("{} : failed to fetch endpoint {}", domain, endpoint);
                 }
             };
         }
 
-        info_and_handle_data!(format!("{domain} : Found existing endpoints"), String);
+        write_info_and_print!("[ENDPOINTS] {}", domain);
         if !existing_endpoints.is_empty() {
             for i in &existing_endpoints {
-                println!(" |- {i}");
-                handle_data!(format!(" |- {i}"), String);
+                write_info_and_print!(" |- {}", i);
             }
         } else {
-            info!("No endpoints found");
+            info!(" |- No endpoints found");
         }
+        write_info_and_print!(" *");
 
-        info!(format!("{domain} : Patterns Found"));
+        write_info_and_print!("[PARTTENS] {}", domain);
         if !found_partterns.is_empty() {
             for (k, v) in &found_partterns {
-                println!(" |- Endpoint: {k} - pattern: {v}");
-                handle_data!(format!(" |- Endpoint: {k} - pattern: {v}"), String);
+                write_info_and_print!(" |- Endpoint: {} - pattern: {}", k, v);
             }
         } else {
-            info!("No Patterns found");
+            info!(" |- No Patterns found");
         }
+        write_info_and_print!(" *");
 
         Some(())
     }
@@ -1755,15 +1833,15 @@ pub mod forbiddenpass {
             {
                 Ok(resp) => match resp.status().as_u16() {
                     200 => {
-                        info_and_handle_data!(format!("{domain} [200] : {:#?}", header), String);
+                        write_info_and_print!(" |- {} [200] : {:#?}", domain, header);
                     }
                     _ => {}
                 },
                 Err(err) => {
                     if err.is_timeout() {
-                        warn!(format!("{domain}: request Timeout"));
+                        warn!("{}: request Timeout", domain);
                     } else {
-                        warn!(format!("{domain}: a request failed"));
+                        warn!("{}: a request failed", domain);
                     }
                 }
             }
@@ -1805,17 +1883,17 @@ pub async fn directory_brute(
                 match resp.status().as_u16() {
                     200 => {
                         if !excluded_codes.contains(&200) {
-                            info_and_handle_data!(format!(" {word} [200]"), String);
+                            write_info_and_print!(" |-{} [200]", word);
                         }
                     }
                     302 => {
                         if !excluded_codes.contains(&302) {
-                            info_and_handle_data!(format!(" {word} [302]"), String);
+                            write_info_and_print!(" |-{} [302]", word);
                         }
                     }
                     301 => {
                         if !excluded_codes.contains(&301) {
-                            info_and_handle_data!(format!(" {word} [301]"), String);
+                            write_info_and_print!(" |-{} [301]", word);
                         }
                     }
                     _ => {}
@@ -1823,7 +1901,7 @@ pub async fn directory_brute(
             }
             Err(err) => {
                 if err.is_timeout() {
-                    warn!(format!("{word} timedout"));
+                    warn!("{} Timedout", word);
                 }
             }
         };
@@ -1849,7 +1927,7 @@ pub fn run_directory_brute_threads(
     excluded_codes: Vec<i32>,
 ) -> () {
     if !file_exists(&wordlist_file) {
-        err!(format!("{wordlist_file} does not exist"));
+        err!("{} does not exist", wordlist_file);
     }
     let wordlists = read_from_file(wordlist_file).unwrap();
     domains.par_iter().for_each(|domain| {
@@ -1894,11 +1972,11 @@ pub fn nuclei_lfi() -> Option<()> {
     match run_cmd_string(cmd.clone()) {
         Some(xmd) => match xmd.stdout {
             Some(data) => {
-                info_and_handle_data!(format!("{data}"), String);
+                write_info_and_print!("{}", data);
             }
             None => match xmd.stderr {
                 Some(data) => {
-                    warn!(format!("{data}"));
+                    warn!("{}", data);
                     return None;
                 }
                 None => {
@@ -1922,12 +2000,12 @@ pub async fn google(domain: String) -> Option<()> {
     match search {
         Ok(data) => {
             for i in &data {
-                info_and_handle_data!(
+                write_info_and_print!(
+                    "{}",
                     format!(
                         " |- url: {}\n |- header: {}\n |- header info: {}\n |- desc: {}\n *",
                         i.url, i.title, i.title_info, i.description
-                    ),
-                    String
+                    )
                 );
             }
         }
@@ -1994,9 +2072,9 @@ pub mod cidr_notation {
             warn!("no open ports found");
         } else {
             for found in &open_ports {
-                handle_data!(format!("{}", found.0), String);
+                write_info!("{}", found.0);
                 for __port in &found.1 {
-                    handle_data!(format!(" |-{}", __port), String);
+                    write_info!(" |-{}", __port);
                 }
             }
         }
@@ -2006,10 +2084,15 @@ pub mod cidr_notation {
 pub fn print_all_ips(ip: &str) -> Option<()> {
     let network = Ipv4Cidr::from_str(ip).unwrap();
     let ips: Vec<_> = network.iter().map(|ip| ip.to_string()).collect::<Vec<_>>();
-    info_and_handle_data!(format!("{ip} Extracted IP's"), String);
-    for _ip in &ips {
-        println!(" |-{_ip}");
-        handle_data!(format!(" |-{ip}"), String);
+    write_info_and_print!("{} Extracted IPs", ip);
+    if ips.is_empty() {
+        write_info_and_print!(" |- could not get any ip");
+        write_info_and_print!(" *");
+    } else {
+        for _ip in &ips {
+            write_info_and_print!(" |-{}", _ip);
+            write_info_and_print!(" *");
+        }
     }
     Some(())
 }
@@ -2215,10 +2298,15 @@ pub mod xss_scan {
         }
 
         for ___vuln in &__Vulns {
-            info!(format!("{}", ___vuln.0));
-            for ____vulns in &___vuln.1 {
-                handle_data!(format!("{}", ____vulns), String);
-                println!("{}", ____vulns);
+            write_info_and_print!(" |- {}", ___vuln.0);
+            if ___vuln.1.is_empty() {
+                write_info_and_print!("  |- no vulns found");
+                write_info_and_print!("  *");
+            } else {
+                for ____vulns in &___vuln.1 {
+                    write_info_and_print!("  |- {}", ____vulns);
+                    write_info_and_print!("  *");
+                }
             }
         }
         Some(())
@@ -2533,15 +2621,20 @@ pub mod sqli_scan {
             .collect::<Vec<(String, Vec<Vuln>)>>();
 
         if _vulnerabilities.is_empty() {
-            warn!("Could not find any payload injection");
+            write_info_and_print!(" |- Could not find any payload injection");
             return Some(());
-        }
-
-        for ___vuln in &_vulnerabilities {
-            info!(format!("{}", ___vuln.0));
-            for ____vulns in &___vuln.1 {
-                handle_data!(format!("{}", ____vulns), String);
-                println!("{}", ____vulns);
+        } else {
+            for ___vuln in &_vulnerabilities {
+                write_info_and_print!(" |- {}", ___vuln.0);
+                if ___vuln.1.is_empty() {
+                    write_info_and_print!("  |- no vulns found");
+                    write_info_and_print!("  *");
+                } else {
+                    for ____vulns in &___vuln.1 {
+                        write_info_and_print!("  |- {}", ____vulns);
+                        write_info_and_print!("  *");
+                    }
+                }
             }
         }
         Some(())
@@ -2894,7 +2987,10 @@ pub mod javascript_scan {
             .collect::<Vec<(String, usize, HashMap<String, String>)>>();
 
         for file in &analyzed_files {
-            println!("{:#?}", file);
+            println!(
+                "FILE: {}\n CONTENT LEN: {}\n FINDINGS: {:#?}\n",
+                file.0, file.1, file.2
+            );
         }
     }
 }
@@ -2957,17 +3053,18 @@ pub mod javascript_endpoints {
 
         if results.is_empty() {
             warn!(format!("no results found"));
+            return;
         }
 
         for (url, vec) in results {
-            info_and_handle_data!(url, String);
+            write_info_and_print!("{}", url);
             if vec.is_empty() {
-                warn!("No results found");
+                write_info_and_print!(" |- No results found\n *");
             } else {
                 for i in vec {
-                    println!(" |-{}", i);
-                    handle_data!(format!(" |-{}", i), String);
+                    write_info_and_print!(" |-{}", i);
                 }
+                write_info_and_print!(" *");
             }
         }
     }
@@ -3227,9 +3324,7 @@ pub mod param_miner {
             match res.1 {
                 param_miner_result::nil => {}
                 _ => {
-                    let strr = format!(" |-{}: {}", res.0, get_param_miner_str(res.1));
-                    handle_data!(strr.clone(), String);
-                    println!("{}", strr);
+                    write_info_and_print!(" |-{}: {}", res.0, get_param_miner_str(res.1));
                 }
             };
         }
@@ -3808,7 +3903,7 @@ pub mod open_redirect {
             .collect();
         for (fullurl, location) in vulnerable_urls {
             if fullurl.len() != 0 && location.len() != 0 {
-                handle_data!(format!(" -{fullurl}: {location}"), String);
+                write_info_and_print!(" |- {} : {}", fullurl, location);
             }
         }
     }
@@ -3882,8 +3977,7 @@ pub mod automoussystemnumber {
         }
         println!("IP ranges Found:");
         for i in &results {
-            println!(" |-{i}");
-            handle_data!(format!(" |-{i}"), String);
+            write_info_and_print!(" |-{}", i);
         }
     }
 }

@@ -177,6 +177,13 @@ struct opt {
     javascript: Option<String>,
 
     #[arg(
+        long,
+        value_name = "domains.txt | domain.com",
+        help = "Find JavaScript files? and endpoint?"
+    )]
+    javascript_scan: Option<String>,
+
+    #[arg(
         long = "javascript_endpoint",
         visible_alias = "je",
         value_name = "domains.txt | domain.com",
@@ -479,9 +486,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 info!(format!("Scanning subdomains"));
                 subdomain_finder(domains).await;
             }
-            None => {
-                println!("No domain or file provided for subdomain scan.");
-            }
+            None => {}
         }
 
         match args.tech {
@@ -576,7 +581,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Some(file_or_domain) => {
                 info!(format!("Finding JavaScript files on: {}", file_or_domain));
                 let domains = parse_for_domains(file_or_domain);
-                spyhunt_util::javascript::crawl_website(domains);
+                spyhunt_util::javascript::crawl_website(domains).await;
+            }
+            None => {}
+        }
+        match args.javascript_scan {
+            Some(file_or_domain) => {
+                info!(format!("Finding JavaScript files on: {}", file_or_domain));
+                let domains = parse_for_domains(file_or_domain);
+                for domain in domains {
+                    spyhunt_util::javascript_scan::javascript_scan(domain).await;
+                }
             }
             None => {}
         }

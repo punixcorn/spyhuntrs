@@ -52,12 +52,19 @@ For the original project : [spyhunt](https://github.com/gotr00t0day/spyhunt)<br/
 
 # INSTALLATION
 
-```
+```sh
 git clone https://github.com/punixcorn/spyhuntrs
 cd spyhuntrs
-cargo build --release  # to build binary
 cargo install --path .  # to build & install, make cargo/bin is in path
 git clone https://github.com/punixcorn/spyhuntrs-deps ~/.spyhuntrs-deps # for needed files
+```
+
+### If Cargo Home isn't in path
+
+Put this in your `~/.bashrc` or `~/.zshrc`
+
+```sh
+export PATH="$PATH:$HOME/.cargo/bin/"
 ```
 
 # EXAMPLE

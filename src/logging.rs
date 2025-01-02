@@ -3,35 +3,47 @@
 
 /// prints message and exits with 1
 macro_rules! err {
-    ($message:expr) => {
-        println!("{} {}", "[E]".red(), $message.bold().red());
-        std::process::exit(1);
-    };
-
-    ($message:expr,$exit_code:expr) => {
-        println!("{} {}", "[E]".red(), $message.bold());
-        if $exit_code > 1 {
-            std::process::exit($exit_code);
+    ($msg:expr) => {
+        {
+            eprintln!("{} {}", "[E]".red(), $msg.bold().red());
+            std::process::exit(1);
         }
     };
-}
 
-/// prints message and continues the process
-macro_rules! warn {
-    ($message:expr) => {
-        println!("{} {}", "[W]".yellow().bold(), $message.italic().yellow())
-    };
-    ($message:expr,$exit_code:expr) => {
-        println!("{} {}", "[W]".yellow().bold(), $message.bold().orange());
-        if $exit_code > 1 {
-            std::process::exit($exit_code);
+    ($fmt:expr, $($arg:tt)*) => {
+        {
+            let formatted_message = format!($fmt, $($arg)*);
+            eprintln!("{} {}", "[E]".red().bold(), formatted_message.bold().red());
         }
     };
 }
 
 /// prints message and continues the process
 macro_rules! info {
-    ($message:expr) => {
-        println!("{} {}", "[I]".green(), $message.italic().white());
+    ($msg:expr) => {
+        {
+            println!("{} {}", "[I]".green(), $msg.italic().white());
+        }
+    };
+    ($fmt:expr, $($arg:tt)*) => {
+        {
+            let formatted_message = format!($fmt, $($arg)*);
+            println!("{} {}", "[I]".green().bold(), formatted_message.italic().white());
+        }
+    };
+}
+
+/// prints message and continues the process
+macro_rules! warn {
+    ($msg:expr) => {
+        {
+            println!("{} {}", "[W]".yellow().bold(), $msg.italic().yellow())
+        }
+    };
+    ($fmt:expr, $($arg:tt)*) => {
+        {
+            let formatted_message = format!($fmt, $($arg)*);
+            println!("{} {}", "[W]".yellow().bold(), formatted_message.italic().yellow())
+        }
     };
 }

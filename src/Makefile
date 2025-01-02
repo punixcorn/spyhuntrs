@@ -1,6 +1,10 @@
+arg=$1
+
 all:
-	cargo run 
+	cargo build
 build:
 	cargo build
 test:
 	cargo test --verbose
+run: 
+	../target/debug/spyhuntrs $(arg)
