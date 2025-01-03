@@ -19,14 +19,19 @@
  * I should fix that to be more uniform?
  */
 
-use futures::future;
+use std::process::exit;
+
+use futures::{future, task::waker};
+use reqwest::Client;
 
 use crate::{
     cmd_handlers::{self, cmd_info, run_cmd, run_cmd_string, run_piped_strings},
     file_util::{file_exists, read_from_file},
-    google_search::{self},
-    handle_deps, request, save_util,
-    user_agents::get_user_agent_prexisting,
+    google_search::{self, v2::user_agent},
+    handle_deps,
+    request::{self, urljoin},
+    save_util,
+    user_agents::{self, get_user_agent_prexisting},
 };
 
 // above all
@@ -269,7 +274,7 @@ pub fn webcrawler(domain: Vec<String>) -> Option<()> {
                             write_info_and_print!(" |- no data gotten from hakrawler\n *");
                         } else {
                             for i in &_vec {
-                                write_info_and_print!(" |-{}\n", i);
+                                write_info_and_print!(" |-{}", i);
                             }
                             write_info_and_print!(" *");
                         }
@@ -481,18 +486,20 @@ pub mod enumerate_domain {
 pub async fn get_favicon_hash(domain: String) -> Option<()> {
     let new_url = request::urljoin(domain.clone(), "/favicon.ico".to_string());
     let resp = fetch_url!(new_url.clone());
-    println!("{:#?}", resp);
+    //println!("{:#?}", resp);
     match resp {
         Ok(body) => {
             if body.status().is_success() {
                 let mut base_64 = general_purpose::STANDARD.encode(body.bytes().await.unwrap());
                 // let hash = murmur3_32(&mut std::io::Cursor::new(base_64), 0).unwrap();
                 let hash = (murmurhash3::murmurhash3_x86_32(base_64.as_bytes(), 0)) as i32;
+                //   println!("hash :{hash}");
                 write_info_and_print!(" |-{} favicon hash : [{}]", domain, hash);
                 return Some(());
+            } else {
+                warn!(format!("could not find favicon for {}", domain.clone()));
+                return None;
             }
-            warn!(format!("could not find favicon for {}", domain.clone()));
-            return None;
         }
         _ => {
             warn!(format!("could not find favicon for {}", domain.clone()));
@@ -517,10 +524,10 @@ pub mod check_cors_misconfig {
     /// ```
     /// # panic
     /// will panic if its unable to create a client
-    pub fn check_cors_misconfig(domain: String) -> () {
+    pub async fn check_cors_misconfig(domain: String) -> () {
         let payload = format!("{domain}, evil.com");
 
-        let client = reqwest::blocking::Client::builder()
+        let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .redirect(reqwest::redirect::Policy::limited(10))
             .timeout(std::time::Duration::new(5, 0))
@@ -535,11 +542,12 @@ pub mod check_cors_misconfig {
         headers.insert(reqwest::header::ORIGIN, payload.parse().unwrap());
 
         // Make the request
-        let mut resp: reqwest::blocking::Response;
+        let mut resp: reqwest::Response;
         match client
             .get(request::urljoin(domain.to_string(), "".to_string()))
             .headers(headers)
             .send()
+            .await
         {
             Ok(response) => {
                 resp = response;
@@ -580,21 +588,21 @@ pub mod check_cors_misconfig {
     }
 
     /// checks for cors misconfiguration in parallel using rayon [completed]
-    pub fn run_cors_misconfig_threads(domains: Vec<String>) -> () {
-        domains.par_iter().for_each(|domain| {
-            {
-                info!(format!("Checking CORS for {}", domain));
-                //std::thread::sleep(std::time::Duration::from_secs(1));
-                check_cors_misconfig(domain.to_string());
-                info!(format!("Checked: {}", domain));
-            }
-        });
-    }
+    // pub fn run_cors_misconfig_threads(domains: Vec<String>) -> () {
+    //     domains.par_iter().for_each(|domain| {
+    //         {
+    //             info!(format!("Checking CORS for {}", domain));
+    //             //std::thread::sleep(std::time::Duration::from_secs(1));
+    //             check_cors_misconfig(domain.to_string()).await;
+    //             info!(format!("Checked: {}", domain));
+    //         }
+    //     });
+    // }
 
     pub async fn run_cors_misconfig_tokio(domains: Vec<String>) {
         let tasks = domains.into_iter().map(|domain| {
             tokio::spawn(async move {
-                check_cors_misconfig(domain);
+                check_cors_misconfig(domain).await;
             })
         });
 
@@ -669,7 +677,7 @@ pub async fn check_host_header_injection(domain: String, proxy: String, is_proxy
     headers.insert("X-Remote-Addr", evil.clone());
     headers.insert("X-Host", evil.clone());
 
-    let proxy = setup_proxies(proxy, is_proxy_file).unwrap();
+    let proxy = setup_proxies(proxy, is_proxy_file).unwrap_or(Vec::new());
 
     let mut curr_proxy: Proxy;
 
@@ -678,29 +686,61 @@ pub async fn check_host_header_injection(domain: String, proxy: String, is_proxy
     //     curr_proxy = reqwest::Proxy::http(proxy[0].clone()).unwrap();
     // };
     //
+    //
 
     // make this fetch a random proxy
-    curr_proxy = reqwest::Proxy::http(proxy[0].clone()).unwrap();
-
-    let client = reqwest::Client::builder()
-        .proxy(curr_proxy)
-        .danger_accept_invalid_certs(true)
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .timeout(std::time::Duration::new(5, 0))
-        .build()
-        .unwrap_or_else(|err| {
-            warn!(format!("unable to create Client Session\n{}", err));
-            panic!();
+    let client = if !proxy.is_empty() {
+        info!("Using Proxy");
+        curr_proxy = reqwest::Proxy::http(proxy[0].clone()).unwrap_or_else(|_| {
+            err!("Failed to create Proxy");
         });
-
-    let normal_response_text: String = client
-        .get(request::urljoin(domain.clone(), "".to_string()))
+        reqwest::Client::builder()
+            .proxy(curr_proxy)
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap_or_else(|err| {
+                err!(format!("unable to create Client Session\n{}", err));
+            })
+    } else {
+        info!("No Proxy Configured");
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap_or_else(|err| {
+                warn!(format!("unable to create Client Session\n{}", err));
+                panic!();
+            })
+    };
+    let url = validate_url!(domain.clone());
+    let normal_response_text: String = match client
+        .get(url)
+        .header(
+            reqwest::header::USER_AGENT,
+            user_agents::get_user_agent_prexisting()
+                .parse::<HeaderValue>()
+                .unwrap(),
+        )
         .send()
         .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
+    {
+        Ok(t) => match t.text().await {
+            Ok(_t) => _t,
+            Err(_) => err!("ERR : Failed to get string"),
+        },
+        Err(err) => {
+            if err.is_timeout() {
+                err!("Request Timedout");
+            }
+            if err.is_request() {
+                err!("Err from request");
+            }
+            if err.is_connect() {
+                err!("Err from connection issue");
+            }
+            err!("Err {}", err);
+            std::process::exit(1);
+        }
+    };
 
     for h in &headers {
         let resp = client
@@ -722,7 +762,7 @@ pub async fn check_host_header_injection(domain: String, proxy: String, is_proxy
                                         }
                                     }
                                     Err(_) => {
-                                        warn!(format!("{domain} : fetching string vaule from Location header failed"));
+                                        warn!(format!("{domain} : fetching string value from Location header failed"));
                                     }
                                 };
                             }
@@ -732,7 +772,7 @@ pub async fn check_host_header_injection(domain: String, proxy: String, is_proxy
                         };
                     }
                     _ => {
-                        warn!(format!("{domain} : failed to retrieve response code"));
+                        warn!(format!("{domain} : response code not in scope"));
                     }
                 };
             }
@@ -1077,7 +1117,9 @@ pub mod javascript {
                     .ok()
                     .and_then(|parsed_url| parsed_url.domain().map(|d| d.to_string()));
 
-                let data = get_js_links(url.clone(), domain).await;
+                let _url = validate_url!(url);
+
+                let data = get_js_links(_url.clone(), domain).await;
 
                 HashMap::from([(url.clone(), data)])
             });
@@ -1090,7 +1132,6 @@ pub mod javascript {
                 .into_iter()
                 .filter_map(|res| res.ok())
                 .collect();
-
         if !results.is_empty() {
             if results[0].is_empty() {
                 info!("No JavaScript files found");
@@ -1101,22 +1142,26 @@ pub mod javascript {
                 for (url, vecs) in hashmap {
                     write_info_and_print!(" |- [URL] {}", url);
                     if vecs.0.is_empty() {
-                        write_info_and_print!(" |- no javascript files found");
+                        write_info_and_print!(" |- {}", "No javascript files found".red());
                         write_info_and_print!(" *");
                     } else {
-                        write_info_and_print!(" |- [Javascript Files]");
+                        write_info_and_print!(" |- {}", "[Javascript Files]".green());
                         for _js_files in vecs.0 {
-                            write_info_and_print!(" |- {}", _js_files);
+                            if !_js_files.is_empty() {
+                                write_info_and_print!(" |- {}", _js_files);
+                            }
                         }
                         write_info_and_print!(" *");
                     }
                     if vecs.1.is_empty() {
-                        write_info_and_print!(" |- no javascript links found");
+                        write_info_and_print!(" |- {}", "No javascript links found".red());
                         write_info_and_print!(" *");
                     } else {
-                        write_info_and_print!(" |- [Javascript Links]");
+                        write_info_and_print!(" |- {}", "[Javascript Links]".green());
                         for _js_links in vecs.1 {
-                            write_info_and_print!(" |- {}", _js_links);
+                            if !_js_links.is_empty() {
+                                write_info_and_print!(" |- {}", _js_links);
+                            }
                         }
                         write_info_and_print!(" *");
                     }
@@ -1854,9 +1899,15 @@ pub mod forbiddenpass {
 // using [wordlist] with status code out of scope of [excluded_codes]
 pub async fn directory_brute(
     domain: String,
-    wordlist: Vec<String>,
+    wordlist_file: String,
     excluded_codes: Vec<i32>,
 ) -> Option<()> {
+    if !file_exists(&wordlist_file) {
+        err!("{} does not exist", wordlist_file);
+    }
+    let wordlists = read_from_file(wordlist_file).unwrap_or_else(|err| {
+        err!("ERR : {}", err);
+    });
     let Session = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -1873,75 +1924,137 @@ pub async fn directory_brute(
         get_user_agent_prexisting().parse::<HeaderValue>().unwrap(),
     );
 
-    for word in &wordlist {
-        match Session
-            .get(request::urljoin(domain.clone(), word.clone()))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                match resp.status().as_u16() {
-                    200 => {
-                        if !excluded_codes.contains(&200) {
-                            write_info_and_print!(" |-{} [200]", word);
-                        }
+    let tasks = wordlists.clone().into_iter().map(|wordlist| {
+        let _excluded_codes = excluded_codes.clone();
+        let _domain = domain.clone();
+        let _Session = Session.clone();
+        tokio::spawn(async move {
+            match _Session
+                .get(request::urljoin(_domain.clone(), wordlist.clone()))
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    if !wordlist.is_empty() {
+                        match resp.status().as_u16() {
+                            200 => {
+                                if !_excluded_codes.contains(&200) {
+                                    write_info_and_print!(" |-{} [200]", wordlist);
+                                }
+                            }
+                            302 => {
+                                if !_excluded_codes.contains(&302) {
+                                    write_info_and_print!(" |-{} [302]", wordlist);
+                                }
+                            }
+                            301 => {
+                                if !_excluded_codes.contains(&301) {
+                                    write_info_and_print!(" |-{} [301]", wordlist);
+                                }
+                            }
+                            _ => {}
+                        };
                     }
-                    302 => {
-                        if !excluded_codes.contains(&302) {
-                            write_info_and_print!(" |-{} [302]", word);
-                        }
-                    }
-                    301 => {
-                        if !excluded_codes.contains(&301) {
-                            write_info_and_print!(" |-{} [301]", word);
-                        }
-                    }
-                    _ => {}
-                };
-            }
-            Err(err) => {
-                if err.is_timeout() {
-                    warn!("{} Timedout", word);
                 }
-            }
-        };
-    }
+                Err(err) => {
+                    if err.is_timeout() {
+                        warn!("{} Timedout", wordlist);
+                    }
+                }
+            };
+        })
+    });
+
+    future::join_all(tasks).await;
+
+    // for word in &wordlist {
+    //     match Session
+    //         .get(request::urljoin(domain.clone(), word.clone()))
+    //         .send()
+    //         .await
+    //     {
+    //         Ok(resp) => {
+    //             match resp.status().as_u16() {
+    //                 200 => {
+    //                     if !excluded_codes.contains(&200) {
+    //                         write_info_and_print!(" |-{} [200]", word);
+    //                     }
+    //                 }
+    //                 302 => {
+    //                     if !excluded_codes.contains(&302) {
+    //                         write_info_and_print!(" |-{} [302]", word);
+    //                     }
+    //                 }
+    //                 301 => {
+    //                     if !excluded_codes.contains(&301) {
+    //                         write_info_and_print!(" |-{} [301]", word);
+    //                     }
+    //                 }
+    //                 _ => {}
+    //             };
+    //         }
+    //         Err(err) => {
+    //             if err.is_timeout() {
+    //                 warn!("{} Timedout", word);
+    //             }
+    //         }
+    //     };
+    // }
     Some(())
 }
 
-pub fn directory_brute_async_wrapper(
-    domain: String,
-    wordlist: Vec<String>,
-    excluded_codes: Vec<i32>,
-) -> Option<()> {
-    return tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(directory_brute(domain, wordlist, excluded_codes));
-}
+// pub fn directory_brute_async_wrapper(
+//     domain: String,
+//     wordlist: Vec<String>,
+//     excluded_codes: Vec<i32>,
+// ) -> Option<()> {
+//     return tokio::runtime::Runtime::new()
+//         .unwrap()
+//         .block_on(directory_brute(domain, wordlist, excluded_codes));
+// }
+//
+// pub async fn directory_brute_tokio(
+//     domain: String,
+//     wordlists: Vec<String>,
+//     excluded_codes: Vec<i32>,
+// ) {
+//     let tasks = wordlists.clone().into_iter().map(|wordlist| {
+//         let _excluded_codes = excluded_codes.clone();
+//         tokio::spawn(async move {
+//             directory_brute(domain.clone(), wordlist, _excluded_codes).await;
+//         })
+//     });
+//
+//     future::join_all(tasks).await;
+// }
+
 /// Runs directory bruteforce on [domain] using a wordlist file [wordlist_file]
 /// and outputs all status codes out of [excluded_codes]
 /// run in parallel using rayon [completed]
-pub fn run_directory_brute_threads(
-    domains: Vec<String>,
-    wordlist_file: String,
-    excluded_codes: Vec<i32>,
-) -> () {
-    if !file_exists(&wordlist_file) {
-        err!("{} does not exist", wordlist_file);
-    }
-    let wordlists = read_from_file(wordlist_file).unwrap();
-    domains.par_iter().for_each(|domain| {
-        {
-            info!(format!("Running Directory bruteforce for {}", domain));
-            //std::thread::sleep(std::time::Duration::from_secs(1));
-            directory_brute_async_wrapper(
-                domain.to_string(),
-                wordlists.clone(),
-                excluded_codes.clone(),
-            );
-        }
-    });
-}
+// pub fn run_directory_brute_threads(
+//     domains: Vec<String>,
+//     wordlist_file: String,
+//     excluded_codes: Vec<i32>,
+// ) -> () {
+//     if !file_exists(&wordlist_file) {
+//         err!("{} does not exist", wordlist_file);
+//     }
+//     let wordlists = read_from_file(wordlist_file).unwrap_or_else(|err| {
+//         err!("ERR : {}", err);
+//     });
+//
+//     domains.par_iter().for_each(|domain| {
+//         {
+//             info!(format!("Running Directory bruteforce for {}", domain));
+//             //std::thread::sleep(std::time::Duration::from_secs(1));
+//             directory_brute_async_wrapper(
+//                 domain.to_string(),
+//                 wordlists.clone(),
+//                 excluded_codes.clone(),
+//             );
+//         }
+//     });
+// }
 
 /// run local file inclusion on a target or domain [not compeleted? depends on implementation of
 /// the cli]
@@ -2069,7 +2182,7 @@ pub mod cidr_notation {
             .collect();
 
         if open_ports.is_empty() {
-            warn!("no open ports found");
+            warn!("No open ports found");
         } else {
             for found in &open_ports {
                 write_info!("{}", found.0);
@@ -2077,6 +2190,7 @@ pub mod cidr_notation {
                     write_info!(" |-{}", __port);
                 }
             }
+            write_info_and_print!(" *");
         }
     }
 }
@@ -2101,6 +2215,7 @@ pub mod xss_scan {
     use crate::{file_util, handle_deps, request, save_util, spyhunt_util};
     use colored::Colorize;
     use core::fmt;
+    use futures::StreamExt;
     use std::{collections::VecDeque, fmt::write, usize};
 
     use {
@@ -2262,14 +2377,39 @@ pub mod xss_scan {
         vulnerabilities
     }
 
-    /// This is so rayon can handle async
-    pub fn xss_scan_url_async_wrapper(domain: String, payloads: Vec<String>) -> Vec<Vuln> {
-        let _runtime = tokio::runtime::Runtime::new().unwrap();
-        _runtime.block_on(xss_scan_url(domain, payloads))
+    // /// This is so rayon can handle async
+    // pub fn xss_scan_url_async_wrapper(domain: String, payloads: Vec<String>) -> Vec<Vuln> {
+    //     let _runtime = tokio::runtime::Runtime::new().unwrap();
+    //     _runtime.block_on(xss_scan_url(domain, payloads))
+    // }
+
+    pub async fn xss_scan_url_tokio(
+        domains: Vec<String>,
+        payloads: Vec<String>,
+    ) -> Vec<(String, Vec<Vuln>)> {
+        let mut domain_stream = tokio_stream::iter(domains.clone());
+        let res = domain_stream
+            .map(|domain| {
+                let _payload = payloads.clone();
+                let _domain = domain.clone();
+                async move {
+                    let data = xss_scan_url(_domain.clone(), _payload).await;
+                    (_domain.clone(), data)
+                }
+            })
+            .buffer_unordered(10)
+            .collect::<Vec<(String, Vec<Vuln>)>>()
+            .await;
+        // = futures::future::join_all(handles)
+        //     .await
+        //     .into_iter()
+        //     .filter_map(|res| res.ok())
+        //     .collect();
+        res
     }
 
     /// this takes in a  Vec of target because its multithreaded
-    pub fn xxs_scanner(targets: Vec<String>) -> Option<()> {
+    pub async fn xxs_scanner(targets: Vec<String>) -> Option<()> {
         // read file
         let deps_path = handle_deps::check_or_clone_spyhuntrs_deps();
         let payloads: Vec<String> = file_util::read_from_file(format!(
@@ -2284,13 +2424,8 @@ pub mod xss_scan {
         }
 
         info!("This might take a while please wait...");
-        let __Vulns: Vec<(String, Vec<Vuln>)> = targets
-            .par_iter()
-            .filter_map(|_target| {
-                let list = xss_scan_url_async_wrapper(_target.clone(), payloads.clone());
-                Some((_target.clone(), list))
-            })
-            .collect::<Vec<(String, Vec<Vuln>)>>();
+        let mut __Vulns: Vec<(String, Vec<Vuln>)> =
+            xss_scan_url_tokio(targets.clone(), payloads.clone()).await;
 
         if __Vulns.is_empty() {
             warn!("Could not find any payload injection");
@@ -3076,7 +3211,7 @@ pub mod param_miner {
     use super::xss_scan;
     use crate::{
         file_util::{file_exists, read_from_file},
-        request::urljoin,
+        request::{self, urljoin},
         save_util,
     };
     use colored::Colorize;
@@ -3351,6 +3486,7 @@ pub mod custom_headers {
     use scraper::{self, Selector};
     use std::fmt::{self, format};
     use std::hash::Hash;
+    use std::io::{stdout, Write};
     use std::time::SystemTime;
     use std::{collections::HashMap, time::Instant};
 
@@ -3541,7 +3677,7 @@ pub mod custom_headers {
                 }
             }
         }
-
+        println!("Done");
         return (finish.as_secs(), resp, status);
     }
 
@@ -3561,10 +3697,8 @@ pub mod custom_headers {
         let mut save_to_file: bool = false;
         let mut path: String = String::new();
         _request_info.url = initial_url.clone();
-
         loop {
             let mut input = String::new();
-            println!("Do you want to scan a file or a single target?[f,t,file,target]:");
             println!("\nCurrent URL: {}", _request_info.url.clone());
             println!("\nOptions:");
             println!("1. Send The request");
@@ -3580,8 +3714,8 @@ pub mod custom_headers {
             println!("11. Exit");
 
             std::io::stdin().read_line(&mut input).unwrap();
-
-            match input.parse::<i32>() {
+            let num = input.replace('\n', "");
+            match num.parse::<i32>() {
                 Ok(int) => {
                     match int {
                         1 => {
@@ -3593,6 +3727,7 @@ pub mod custom_headers {
                                 } else {
                                     println!("Sending request...");
                                 }
+
                                 let (time, resp, status) =
                                     send_request(_request_info.clone()).await;
 
@@ -3753,7 +3888,7 @@ pub mod custom_headers {
                         }
                         11 => {
                             println!("Exiting...");
-                            break;
+                            std::process::exit(0);
                         }
                         _ => {
                             println!("Invalid option,pick between 1-11");
@@ -3855,6 +3990,7 @@ pub mod open_redirect {
             test_domain,
         ));
     }
+
     /// Entry point
     pub fn process_url(url: String) {
         let TEST_DOMAIN = "google.com";

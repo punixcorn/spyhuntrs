@@ -162,6 +162,14 @@ struct opt {
     paramspider: Option<String>,
 
     #[arg(
+        visible_alias = "ch",
+        long = "custom-headers",
+        value_name = "https://domain.com",
+        help = "Send Custom headers"
+    )]
+    custom_headers: Option<String>,
+
+    #[arg(
         long = "waybackurls",
         value_name = "https://domain.com",
         help = "Scan for waybackurls"
@@ -177,14 +185,14 @@ struct opt {
     javascript: Option<String>,
 
     #[arg(
-        long,
+        long = "javascript-scan",
         value_name = "domains.txt | domain.com",
         help = "Find JavaScript files? and endpoint?"
     )]
     javascript_scan: Option<String>,
 
     #[arg(
-        long = "javascript_endpoint",
+        long = "javascript-endpoint",
         visible_alias = "je",
         value_name = "domains.txt | domain.com",
         help = "Find JavaScript endpoints"
@@ -248,8 +256,7 @@ struct opt {
         long = "hostheaderinjection",
         visible_alias = "hh",
         value_name = "domain.com",
-        help = "Host header injection",
-        requires = "_proxy"
+        help = "Host header injection"
     )]
     hostheaderinjection: Option<String>,
 
@@ -568,6 +575,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             None => {}
         }
+        match args.custom_headers {
+            Some(domain) => {
+                info!("Running Custom Headers");
+                let url = validate_url!(domain.clone());
+                spyhunt_util::custom_headers::custom_headers(url).await;
+            }
+            None => {}
+        }
 
         match args.waybackurls {
             Some(url) => {
@@ -585,6 +600,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             None => {}
         }
+
         match args.javascript_scan {
             Some(file_or_domain) => {
                 info!(format!("Finding JavaScript files on: {}", file_or_domain));
@@ -787,7 +803,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Some(file_or_domain) => {
                 info!(format!("Attempting bypass on  {file_or_domain}"));
                 let domains = parse_for_domains(file_or_domain);
-                spyhunt_util::run_directory_brute_threads(domains, wordlist, Vec::new());
+                for d in &domains {
+                    spyhunt_util::directory_brute(d.to_string(), wordlist.clone(), Vec::new())
+                        .await;
+                }
             }
             None => {}
         }
@@ -846,7 +865,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Some(file_or_domain) => {
                 info!(format!("Running XSS scan on {}", file_or_domain.clone()));
                 let domains = parse_for_domains(file_or_domain);
-                spyhunt_util::xss_scan::xxs_scanner(domains);
+                spyhunt_util::xss_scan::xxs_scanner(domains).await;
             }
             None => {}
         }

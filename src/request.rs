@@ -12,6 +12,7 @@ pub async fn fetch(url: String, mut user_agent: String) -> Result<Response, Stri
     if user_agent.len() == 0 {
         user_agent = get_user_agent(false, false).await.to_string();
     }
+
     let client = reqwest::Client::builder().build().unwrap();
     let response = client
         .get(urljoin(url, "".to_string()))
@@ -93,6 +94,6 @@ macro_rules! fetch_url {
 #[macro_export]
 macro_rules! validate_url {
     ($url :expr ) => {
-        urljoin($url, "".to_string())
+        request::urljoin(format!("{}", $url), "".to_string())
     };
 }

@@ -1,6 +1,5 @@
 #![macro_use]
 #![allow(unused_macros)]
-
 /// prints message and exits with 1
 macro_rules! err {
     ($msg:expr) => {
@@ -14,6 +13,7 @@ macro_rules! err {
         {
             let formatted_message = format!($fmt, $($arg)*);
             eprintln!("{} {}", "[E]".red().bold(), formatted_message.bold().red());
+            std::process::exit(1);
         }
     };
 }

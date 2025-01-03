@@ -182,22 +182,22 @@ macro_rules! write_info {
 
 macro_rules! write_info_and_print_info {
     ($s:expr) => {
+        info!($s);
         if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
-            info!($s);
             save_util::save_string(format!("{}",$s))
         }
     };
 
     ($fmt:expr, $($arg:tt)*) => {
+        let formatted_message = format!($fmt, $($arg)*);
+        info!(formatted_message);
         if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
-            let formatted_message = format!($fmt, $($arg)*);
-            info!(formatted_message);
             save_util::save_string(formatted_message)
         }
     };
@@ -205,22 +205,22 @@ macro_rules! write_info_and_print_info {
 
 macro_rules! write_info_and_print {
     ($s:expr) => {
+        println!($s);
         if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
-            println!($s);
             save_util::save_string(format!("{}",$s))
         }
     };
 
     ($fmt:expr, $($arg:tt)*) => {
+        let formatted_message = format!($fmt, $($arg)*);
+        println!("{}",formatted_message);
         if save_util::check_if_save() {
             if save_util::get_save_file().is_empty() {
                 err!("no save file defined");
             }
-            let formatted_message = format!($fmt, $($arg)*);
-            println!("{}",formatted_message);
             save_util::save_string(formatted_message)
         }
     };
