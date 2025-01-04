@@ -27,8 +27,7 @@ use reqwest::Client;
 use crate::{
     cmd_handlers::{self, cmd_info, run_cmd, run_cmd_string, run_piped_strings},
     file_util::{file_exists, read_from_file},
-    google_search::{self, v2::user_agent},
-    handle_deps,
+    google_search, handle_deps,
     request::{self, urljoin},
     save_util,
     user_agents::{self, get_user_agent_prexisting},
@@ -2109,7 +2108,7 @@ pub fn nuclei_lfi() -> Option<()> {
 
 pub async fn google(domain: String) -> Option<()> {
     println!("{}", "searching...".yellow());
-    let search = google_search::v2::user_agent::search(domain, 50).await;
+    let search = google_search::v2::google_user_agent::search(domain, 50).await;
     match search {
         Ok(data) => {
             for i in &data {

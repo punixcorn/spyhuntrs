@@ -303,7 +303,7 @@ struct opt {
     importantsubdomains: Option<String>,
 
     #[arg(
-        long = "not_found",
+        long = "not-found",
         value_name = "domains.txt",
         help = "Check for 404 status codes"
     )]
@@ -317,7 +317,7 @@ struct opt {
     nmap: Option<String>,
 
     #[arg(
-        long = "api_fuzzer",
+        long = "api-fuzzer",
         value_name = "domain-list.txt | domain.com",
         help = "Look for API endpoints"
     )]
@@ -355,7 +355,7 @@ struct opt {
     directorybrute: Option<String>,
 
     #[arg(
-        long = "cidr_notation",
+        long = "cidr-notation",
         value_name = "IP/24",
         help = "Scan an IP range",
         requires = "_port"
@@ -370,11 +370,17 @@ struct opt {
     )]
     ports: Option<String>,
 
-    #[arg(long = "print_all_ips", value_name = "IP/24", help = "Print all IPs")]
+    #[arg(
+        visible_alias = "pip",
+        short = 'p',
+        long = "print-all-ips",
+        value_name = "IP/24",
+        help = "Print all IPs"
+    )]
     print_all_ips: Option<String>,
 
     #[arg(
-        long = "xss_scan",
+        long = "xss-scan",
         visible_alias = "xss",
         value_name = "domains.txt | domain.com?id=1",
         help = "Scan for XSS vulnerabilities"
@@ -382,7 +388,7 @@ struct opt {
     xss_scan: Option<String>,
 
     #[arg(
-        long = "sqli_scan",
+        long = "sqli-scan",
         visible_alias = "sqli",
         value_name = "domains.txt | domain.com?id=1",
         help = "Scan for SQLi vulnerabilities"
@@ -401,7 +407,7 @@ struct opt {
     //     help = "Maximum number of concurrent requests"
     // )]
     // concurrency: usize,
-    #[arg(long = "nuclei_lfi", help = "Find Local File Inclusion with nuclei", action = clap::ArgAction::Count)]
+    #[arg(long = "nuclei-lfi", help = "Find Local File Inclusion with nuclei", action = clap::ArgAction::Count)]
     nuclei_lfi: u8,
 
     #[arg(
@@ -893,6 +899,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             None => {}
         }
+
         match args.install {
             0 => {}
             _ => {
@@ -971,6 +978,5 @@ async fn main() -> Result<(), Box<dyn Error>> {
             None => {}
         }
     }
-
     Ok(())
 }

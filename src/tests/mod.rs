@@ -4,6 +4,8 @@ use crate::{spyhunt_util, user_agents};
  */
 #[cfg(test)]
 mod tests {
+    use spyhunt_util::javascript_endpoints;
+
     use crate::save_util::set_save_file;
 
     // Note this useful idiom: importing names from outer (for mod tests) scope.
@@ -11,7 +13,7 @@ mod tests {
     // macros for handling redundant tasks
     macro_rules! data {
         () => {
-            format!("en.wikipedia.org")
+            format!("https://en.wikipedia.org")
         };
     }
 
@@ -73,8 +75,30 @@ mod tests {
     #[test]
     fn nmap() {
         save!();
-        // let x = spyhunt_util::nmap(data!());
+        let x = spyhunt_util::nmap(data!());
         assert_eq!(Some(()), Some(()));
+    }
+
+    #[tokio::test]
+    async fn javascript() {
+        save!();
+        let x = spyhunt_util::javascript::crawl_website([data!()].to_vec()).await;
+        assert_eq!(x, Some(()));
+    }
+
+    // #[tokio::test]
+    // need to fix async
+    // async fn javascript_endpoints() {
+    //     save!();
+    //     // let x = spyhunt_util::javascript_endpoints::process_js_files([data!()].to_vec()).await;
+    //     assert_eq!(x, ());
+    // }
+
+    #[tokio::test]
+    async fn javascript_scan() {
+        save!();
+        let x = spyhunt_util::javascript_scan::javascript_scan(data!()).await;
+        assert_eq!(x, ());
     }
 
     #[test]
@@ -83,6 +107,39 @@ mod tests {
         // takes too loong
         //let x = spyhunt_util::paramspider(data!());
         assert_eq!(Some(()), Some(()));
+    }
+
+    #[tokio::test]
+    async fn api_fuzzer() {
+        save!();
+        let x = spyhunt_util::api_fuzzer::api_fuzzer_tokio([data!()].to_vec()).await;
+        assert_eq!(x, ());
+    }
+    #[tokio::test]
+    async fn forbiddenpass() {
+        save!();
+        let x = spyhunt_util::forbiddenpass::forbiddenpass(data!()).await;
+        assert_eq!(x, Some(()));
+    }
+
+    // Needs a wordlist file to run
+    // #[tokio::test]
+    // async fn directorybrute() {
+    //     save!();
+    //     let x = spyhunt_util::directory_brute(
+    //         "en.wikipedia.org".to_string(),
+    //         "".to_string(),
+    //         Vec::new(),
+    //     )
+    //     .await;
+    //
+    //     assert_eq!(x, Some(()));
+    // }
+    #[test]
+    fn cidr_notation() {
+        save!();
+        let x = spyhunt_util::cidr_notation::cidr_notation("127.0.0.1".to_string(), None);
+        assert_eq!(x, ());
     }
 
     #[tokio::test]

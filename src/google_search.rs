@@ -199,26 +199,31 @@ pub mod v1 {
         return Some(format!("http://{proxy}"));
     }
 }
-
+/// Make a request to google for relevant information v2;
 /// This version works, but has 2 sub versions because for some reason :
 /// when you make a get request with useragent, the returned body is different from no useragent
 /// and the request result is better???
 /// # subversions
-/// - v2::no_user_agent
-/// - v2::user_agent
+/// - v2::google_no_user_agent
+/// - v2::google_user_agent
 /// # Info
 /// They all have the same functions and features, but `v2::user_agent` is better
 /// # Example
 ///  ```rust
-///  google_search::v2::user_agent::search("food".to_string(),10).await.unwrap();
-///  google_search::v2::no_user_agent::search("food".to_string(),10).await.unwrap();
+///  google_search::v2::google_user_agent::search("food".to_string(),10).await.unwrap();
+///  google_search::v2::google_no_user_agent::search("food".to_string(),10).await.unwrap();
 ///  // the structs are the same
-///  google_search::v2::GoogleSearchResults == google_search::v1::GoogleSearchResults
+///  google_search::v2::GoogleSearchResults{} == google_search::v1::GoogleSearchResults{}
+///
+///  println("{} {} {} {}");
 ///  ```
 pub mod v2 {
-    /// use no user_agent, the results aren't as good
-    /// use `v2::user_agent`
-    pub mod no_user_agent {
+    /// Make a request to google for relevant info
+    /// use google_user_agent, the results aren't as good
+    /// in google_no_user_agent
+    ///
+    /// # use `google_search::v2::google_user_agent`
+    pub mod google_no_user_agent {
         use {
             colored::Colorize,
             regex::Regex,
@@ -239,7 +244,16 @@ pub mod v2 {
         }
 
         impl GoogleSearchResult {
-            /// fills up with default vaule "Could not retrieve ..."
+            /// fills up the struct with default vaule "Could not retrieve ..."
+            /// in every member
+            /// # Example
+            /// ```rust
+            /// let x = google_search::v2::google_no_user_agent::GoogleSearchResult::new();
+            /// assert_eq!(x.url,"Could not retrieve url");
+            /// assert_eq!(x.title,"Could not retrieve title");
+            /// assert_eq!(x.title_url,"Could not retrieve url title");
+            /// assert_eq!(x.description,"Could not retrieve description");
+            /// ```
             fn new() -> Self {
                 return Self {
                     url: String::from("Could not retrieve url"),
@@ -249,7 +263,13 @@ pub mod v2 {
                 };
             }
 
-            /// check if none of the vaules has "could not retrieve"
+            /// Check if any of the members in the struct has "could not retrieve"
+            /// All members must be populated to return `true`
+            /// # Example
+            /// ```rust
+            /// let x = google_search::v2::google_no_user_agent::GoogleSearchResult::new();
+            /// assert_eq!(x.is_fully_populated,false);
+            /// ```
             pub fn is_fully_populated(&self) -> bool {
                 !self.url.contains("Could not retrieve")
                     && !self.title.contains("Could not retrieve")
@@ -258,14 +278,17 @@ pub mod v2 {
             }
         }
 
-        /// get any related link about the query
-        /// use a huge number of results to get better results eg 50
+        /// Get any related link about the query
+        /// Use a huge number of results to get better results eg: `50`
         /// # Example
         /// ```rust
-        /// let s :Vec<String> = google_search::v2::scrape_url("rust language",50).unwrap();
+        /// let s :Vec<String> = google_search::v2::google_no_user_agent::scrape_url("rust language",50).unwrap();
+        /// for link in s {
+        ///     println("link found: {link}");
+        /// }
         /// ```
         /// # Panic
-        /// will panic if scrape::Selector fails
+        /// will panic if `scrape::Selector` fails
         pub async fn scrape_url(
             query: String,
             number_of_results: i8,
@@ -297,13 +320,14 @@ pub mod v2 {
             Ok(ret)
         }
 
-        /// make a blocking google request with the query and return the Response
+        /// Make a google request with the query and return the Response
         /// # Example
         /// ```rust
-        /// let s :reqwest::blocking::Response = google_search::v2::_req("rust language").unwrap();
+        /// let s :reqwest::Response = google_search::v2::google_no_user_agent::_req("rust language").unwrap();
+        /// let x = s.text().await?;
         /// ```
         /// # Panic
-        /// will no panic , will return an error
+        /// will not panic , will return an error
         pub async fn _req(
             query: String,
             results_num: i8,
@@ -327,11 +351,17 @@ pub mod v2 {
             Ok(x)
         }
 
-        /// find and return relevant info from google scraping on [query]
+        /// Find and return relevant info from google scraping on [query]
         /// use a bigger number in [number_of_results] to get more relevant data eg 50
+        /// Some members of the `GoogleSearchResult` will no be populated if no data is gotten
         /// # Example
         /// ```rust
-        /// let x:Vec<google_search::v2::GoogleSearchResult> = google_search::v2::search("rust language",50).unwrap();
+        /// let x:Vec<google_search::v2::google_no_user_agent::GoogleSearchResult> = google_search::v2::google_no_user_agent::search("rust language",50).unwrap();
+        /// for i in x {
+        ///     if !i.is_not_fully_populated(){
+        ///          println("{} {} {} {}",i.url,i.title,i.title_url,i.description);
+        ///     }
+        /// }
         /// ```
         /// # Panic
         /// will panic if regex construction fails
@@ -396,9 +426,10 @@ pub mod v2 {
         }
     }
 
-    /// This with a useragent, compeletly different results
-    /// more of better results but it's different by the code it receives
-    pub mod user_agent {
+    /// This with a useragent, compeletly different results.
+    /// But, better results; it's different by the code it receives
+    /// use this instead of `google_search::v2::google_no_user_agent`
+    pub mod google_user_agent {
         use {
             reqwest::{self},
             scraper::{self, selectable::Selectable, Html, Selector},
@@ -416,7 +447,16 @@ pub mod v2 {
         }
 
         impl GoogleSearchResult {
-            /// fills up with default vaule "Could not retrieve ..."
+            /// fills up the struct with default vaule "Could not retrieve ..."
+            /// in every member
+            /// # Example
+            /// ```rust
+            /// let x = google_search::v2::google_user_agent::GoogleSearchResult::new();
+            /// assert_eq!(x.url,"Could not retrieve url");
+            /// assert_eq!(x.title,"Could not retrieve title");
+            /// assert_eq!(x.title_url,"Could not retrieve url title");
+            /// assert_eq!(x.description,"Could not retrieve description");
+            /// ```
             fn new() -> Self {
                 return Self {
                     url: String::from("Could not retrieve url"),
@@ -426,7 +466,13 @@ pub mod v2 {
                 };
             }
 
-            /// check if none of the vaules has "could not retrieve"
+            /// Check if any of the members in the struct has "could not retrieve"
+            /// All members must be populated to return `true`
+            /// # Example
+            /// ```rust
+            /// let x = google_search::v2::google_user_agent::GoogleSearchResult::new();
+            /// assert_eq!(x.is_fully_populated,false);
+            /// ```
             pub fn is_fully_populated(&self) -> bool {
                 !self.url.contains("Could not retrieve")
                     && !self.title.contains("Could not retrieve")
@@ -440,9 +486,12 @@ pub mod v2 {
         /// # Example
         /// ```rust
         /// let s :Vec<String> = google_search::v2::scrape_url("rust language",50).unwrap();
+        /// for link in s {
+        ///     println("link found: {link}");
+        /// }
         /// ```
         /// # Panic
-        /// will panic if scrape::Selector fails
+        /// will panic if `scrape::Selector` fails
         pub async fn scrape_url(
             query: String,
             number_of_results: i8,
@@ -473,13 +522,14 @@ pub mod v2 {
             Ok(ret)
         }
 
-        /// make a blocking google request with the query and return the Response
+        /// Make a google request with the query and return the Response,
         /// # Example
         /// ```rust
-        /// let s :reqwest::blocking::Response = google_search::v2::_req("rust language").unwrap();
+        /// let s :reqwest::Response = google_search::v2::google_user_agent::_req("rust language").unwrap();
+        /// let x = s.text().await?;
         /// ```
         /// # Panic
-        /// will no panic , will return an error
+        /// will not panic , will return an error
         pub async fn _req(
             query: String,
             results_num: i8,
@@ -508,11 +558,17 @@ pub mod v2 {
             Ok(x)
         }
 
-        /// find and return relevant info from google scraping on [query]
-        /// use a bigger number in [number_of_results] to get more relevant data eg 50
+        /// Find and return relevant info from google scraping on [query].
+        /// Use a bigger number in [number_of_results] to get more relevant data eg 50
+        /// Some members of the `GoogleSearchResult` will no be populated if no data is gotten
         /// # Example
         /// ```rust
-        /// let x:Vec<google_search::v2::GoogleSearchResult> = google_search::v2::search("rust language",50).unwrap();
+        /// let x:Vec<google_search::v2::google_user_agent::GoogleSearchResult> = google_search::v2::google_user_agent::search("rust language",50).unwrap();
+        /// for i in x {
+        ///     if !i.is_not_fully_populated(){
+        ///          println("{} {} {} {}",i.url,i.title,i.title_url,i.description);
+        ///     }
+        /// }
         /// ```
         /// # Panic
         /// will panic if regex construction fails

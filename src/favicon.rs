@@ -1,5 +1,13 @@
 use std::collections::HashMap;
 
+/// Returns a hashmap of hash to,it's favicon name
+/// some websites may change their favicon so the hash will change
+///
+/// # Example
+/// ```rust
+///     let map = init();
+///     assert_eq!(map.contains_key(&99395752), true);
+/// ```
 pub fn init() -> HashMap<i32, &'static str> {
     let mut fingerprint: HashMap<i32, &str> = HashMap::new();
     fingerprint.insert(99395752, "slack-instance");
