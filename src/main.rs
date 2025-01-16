@@ -684,7 +684,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     file_or_domain
                 ));
                 let domains = parse_for_domains(file_or_domain);
-                pathhunt::scan_target_tokio(domains).await;
+                pathhunt::scan_target_tokio(domains.clone()).await;
+                pathhunt::scan_params_tokio(domains).await;
             }
             None => {}
         }

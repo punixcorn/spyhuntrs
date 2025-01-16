@@ -78,11 +78,20 @@ pub async fn scan_target_tokio(targets: Vec<String>) {
     future::join_all(tasks).await;
 }
 
-pub async fn scan_params(target: &String) -> Option<()> {
+pub async fn scan_params_tokio(targets: Vec<String>) {
+    let tasks = targets.into_iter().map(|domain| {
+        tokio::spawn(async move {
+            scan_params(domain).await;
+        })
+    });
+    future::join_all(tasks).await;
+}
+
+pub async fn scan_params(target: String) -> Option<()> {
     let client = reqwest::Client::builder().build().unwrap();
     let user_agent = user_agents::get_user_agent(false, false).await;
     let response = client
-        .get(target)
+        .get(target.clone())
         .header(header::USER_AGENT, user_agent.clone())
         .send()
         .await;
@@ -109,19 +118,25 @@ pub async fn scan_params(target: &String) -> Option<()> {
         .map(|cap| cap.get(1).unwrap().as_str())
         .collect();
 
-    println!("href links: {:?}", href_links);
-    println!("src links: {:?}", src_links);
+    // println!("href links: {:?}", href_links);
+    // println!("src links: {:?}", src_links);
 
     // remove dups
     // this holds a non dup of the original vector
     let mut duplicate_full_links: Vec<&str> = vec![];
 
-    for i in href_links.clone() {
+    for i in src_links.clone() {
         if href_links.contains(&i) {
             continue;
         }
         duplicate_full_links.push(i);
     }
+
+    for i in href_links.clone() {
+        duplicate_full_links.push(i);
+    }
+
+    // println!("dup : {:?}", duplicate_full_links);
 
     // holds all the links that can be paramed, eg domain.com/foo=2
     let mut param_links: Vec<String> = vec![];
@@ -148,7 +163,7 @@ pub async fn scan_params(target: &String) -> Option<()> {
     let mut vulnerable: Vec<String> = vec![];
     let mut parameters_list: Vec<String> = vec![];
 
-    warn!("[I] Param links");
+    info!("Param links");
     for i in &param_links {
         println!("{i}");
     }
@@ -156,7 +171,7 @@ pub async fn scan_params(target: &String) -> Option<()> {
     for param in &param_links {
         let param_vec: Vec<&str> = param.split('=').collect();
         let trip_first_time = false;
-        for p in param_vec {
+        for p in &duplicate_full_links {
             if p.ends_with("=") {
                 parameters_list.push(p.to_string());
             }
@@ -166,8 +181,16 @@ pub async fn scan_params(target: &String) -> Option<()> {
     // -imp save
     info!("Parameters found");
     for i in &parameters_list {
-        println!("{i}");
+        println!(" |-{i}");
     }
+    println!(" *");
+
+    // -imp save
+    info!("Full links found");
+    for i in &duplicate_full_links {
+        println!(" |-{i}");
+    }
+    println!(" *");
 
     let path_traversal_list = get_path_traversal_list().await;
 
