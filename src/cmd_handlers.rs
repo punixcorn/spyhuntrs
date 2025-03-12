@@ -172,7 +172,7 @@ pub fn run_piped(mut cmd1: Vec<&str>, mut cmd2: Vec<&str>) -> Option<cmd_info> {
     return Some(cmd_result);
 }
 
-/// i just realized?? we can just pass all the stuff to bash and grap output
+/// i just realized?? we can just pass all the stuff to bash and grab output
 /// cmd will be passed to bash
 /// bash -c $cmd
 pub fn run_bash(cmd: String) -> Option<cmd_info> {

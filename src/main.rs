@@ -15,6 +15,8 @@ use std::{
     time::{self, Instant},
 };
 
+use std::error;
+
 use {
     colored::Colorize,
     rayon::prelude::*,
@@ -680,7 +682,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         match args.pathhunt {
             Some(file_or_domain) => {
                 info!(format!(
-                    "Checking directory traversal in: {}",
+                    "Checking for paths in: {}",
                     file_or_domain
                 ));
                 let domains = parse_for_domains(file_or_domain);

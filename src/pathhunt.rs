@@ -171,7 +171,10 @@ pub async fn scan_params(target: String) -> Option<()> {
     for param in &param_links {
         let param_vec: Vec<&str> = param.split('=').collect();
         let trip_first_time = false;
-        for p in &duplicate_full_links {
+
+        for p in &param_vec
+        /*&duplicate_full_links */
+        {
             if p.ends_with("=") {
                 parameters_list.push(p.to_string());
             }
@@ -188,8 +191,12 @@ pub async fn scan_params(target: String) -> Option<()> {
     // -imp save
     info!("Full links found");
     for i in &duplicate_full_links {
+        if i.find("data:image").is_some() {
+            continue;
+        };
         println!(" |-{i}");
     }
+
     println!(" *");
 
     let path_traversal_list = get_path_traversal_list().await;
